@@ -33,13 +33,6 @@ class LogseqSync(BaseModel):
     ts: str
 
 
-class NotionSync(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    page_id: str | None = None
-    url: str | None = None
-    ts: str
-
-
 class TodoistSync(BaseModel):
     model_config = ConfigDict(extra="allow")
     task_id: str
@@ -50,7 +43,6 @@ class TodoistSync(BaseModel):
 class SyncState(BaseModel):
     model_config = ConfigDict(extra="allow")
     logseq: LogseqSync | None = None
-    notion: NotionSync | None = None
     todoist: TodoistSync | None = None
 
 

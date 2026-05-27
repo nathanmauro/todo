@@ -1,4 +1,4 @@
-"""Todoist REST API v2 sync + reconcile."""
+"""Todoist API v1 sync + reconcile."""
 from __future__ import annotations
 
 import json
