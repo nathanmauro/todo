@@ -6,8 +6,8 @@ import os
 import subprocess
 import sys
 
-from . import logseq, notion
-from .config import LOGSEQ_GRAPH, NOTION_DB_ID, TODO_DIR, TODOS_FILE
+from . import logseq, todoist
+from .config import LOGSEQ_GRAPH, TODOIST_PROJECT_ID, TODO_DIR, TODOS_FILE
 from .formatting import human_ago, sync_badges
 from .models import TodoEntry, now_iso
 from .storage import (
@@ -96,8 +96,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
     rc = 0
     if args.target in ("all", "logseq"):
         rc |= logseq.sync(entries)
-    if args.target in ("all", "notion"):
-        rc |= notion.sync(entries)
+    if args.target in ("all", "todoist"):
+        rc |= todoist.sync(entries)
     write_all(entries)
     return rc
 
@@ -107,8 +107,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     rc = 0
     if args.target in ("all", "logseq"):
         rc |= logseq.reconcile(entries)
-    if args.target in ("all", "notion"):
-        rc |= notion.reconcile(entries)
+    if args.target in ("all", "todoist"):
+        rc |= todoist.reconcile(entries)
     write_all(entries)
     return rc
 
@@ -124,9 +124,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print(f"logseq journals: {ls_dir}  {'OK' if ls_dir.exists() else 'MISSING'}")
     if not ls_dir.exists():
         ok = False
-    tok = notion.token()
-    print(f"notion token: {'OK (keychain or env)' if tok else 'MISSING'}")
+    tok = todoist.token()
+    print(f"todoist token: {'OK (keychain or env)' if tok else 'MISSING'}")
     if not tok:
         ok = False
-    print(f"notion db id: {NOTION_DB_ID}")
+    print(f"todoist project: {TODOIST_PROJECT_ID}")
     return 0 if ok else 1

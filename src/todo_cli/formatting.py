@@ -29,6 +29,8 @@ def sync_badges(entry: TodoEntry) -> str:
     parts = []
     if entry.sync.logseq:
         parts.append("logseq")
+    if entry.sync.todoist:
+        parts.append("todoist")
     if entry.sync.notion:
         parts.append("notion")
     return " ".join(f"[{p}]" for p in parts)

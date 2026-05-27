@@ -1,6 +1,6 @@
 # todo
 
-Local-first todo capture CLI. Store in `~/.todo/todos.jsonl`. Push to Logseq journal + Notion DB. Pull status back with `reconcile`.
+Local-first todo capture CLI. Store in `~/.todo/todos.jsonl`. Push to Logseq journal + Todoist. Pull status back with `reconcile`.
 
 ## Install
 
@@ -13,13 +13,13 @@ Edits to `src/todo_cli/cli.py` apply immediately via the `todo` shim in `~/.loca
 ## Commands
 
 ```
-todo add "text" [--due YYYY-MM-DD] [--source ...]
+todo add "text" [--due YYYY-MM-DD] [--source ...] [--project ...]
 todo ls   [--all|--open|--done]
 todo done <id-prefix>
 todo rm   <id-prefix>
 todo edit
-todo sync       [--target all|logseq|notion]
-todo reconcile  [--target all|logseq|notion]
+todo sync       [--target all|logseq|todoist]
+todo reconcile  [--target all|logseq|todoist]
 todo doctor
 ```
 
@@ -29,14 +29,16 @@ Env overrides:
 
 - `TODO_DIR` — store dir (default `~/.todo`)
 - `TODO_LOGSEQ_GRAPH` — Logseq graph root (default `~/Notes`)
-- `TODO_NOTION_DB_ID` — Notion "Todo List" database id
-- `NOTION_TOKEN` — overrides Keychain lookup
+- `TODO_TODOIST_PROJECT_ID` — Todoist project to create tasks in
+- `TODOIST_TOKEN` — overrides Keychain lookup
 
-Notion token in Keychain:
+Todoist token in Keychain:
 
 ```sh
-security add-generic-password -a notion -s todo-cli -w '<token>'
+security add-generic-password -a todoist -s todo-cli -w '<token>'
 ```
+
+Get your token from https://app.todoist.com/app/settings/integrations/developer.
 
 ## Spotlight capture
 
@@ -52,9 +54,9 @@ Use: `⌘Space` → `todo` → `↵` → type text → `↵`.
 
 Appends `- TODO <text> <!-- todo:<id> --></text>` block to today's journal `<graph>/journals/YYYY_MM_DD.md`. `reconcile` flips local to done when block starts with `- DONE` / `- CANCELED` / `- [x]`.
 
-## Notion
+## Todoist
 
-Creates a row in the configured DB with `Task name` (title) + `Status` = `Not started`. `reconcile` flips local to done when remote `Status` is `Done`. Skips archived/trashed pages.
+Creates a task in the configured project via Todoist REST API v2. When `--project` is set, looks up a matching section name and routes the task there. Labels are set from `--source`. `reconcile` flips local to done when the remote task is completed or deleted (404).
 
 ## Storage
 
@@ -67,9 +69,10 @@ Creates a row in the configured DB with `Task name` (title) + `Status` = `Not st
   "text": "...",
   "status": "open|done",
   "source": "cli|spotlight|...",
+  "project": "bin|todo|...",
   "sync": {
     "logseq": null | {"file": "...", "marker": "...", "ts": "..."},
-    "notion": null | {"page_id": "...", "url": "...", "ts": "..."}
+    "todoist": null | {"task_id": "...", "url": "...", "ts": "..."}
   }
 }
 ```
