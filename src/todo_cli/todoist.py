@@ -199,7 +199,7 @@ def reconcile(entries: list[TodoEntry]) -> int:
             print(f"todoist: {e.short_id} network error {exc}")
             failed += 1
             continue
-        if task.get("is_completed"):
+        if task.get("checked"):
             e.status = "done"
             e.done_ts = now_iso()
             e.done_source = "todoist"
