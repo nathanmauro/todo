@@ -1,7 +1,7 @@
 [project]
 name = "todo-cli"
 version = "0.1.0"
-description = "Local-first todo capture with Logseq + Notion sync"
+description = "Local-first todo capture with Logseq + Todoist sync"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.6",
