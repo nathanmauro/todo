@@ -1,4 +1,4 @@
-"""todo — local-first capture CLI with Logseq + Notion sync.
+"""todo — local-first capture CLI with Logseq + Todoist sync.
 
 Storage: ~/.todo/todos.jsonl (append-only JSON Lines).
 """
@@ -46,9 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("edit", help="open todos.jsonl in $EDITOR")
     e.set_defaults(func=cmd_edit)
 
-    s = sub.add_parser("sync", help="push to Logseq and/or Notion")
+    s = sub.add_parser("sync", help="push to Logseq and/or Todoist")
     s.add_argument(
-        "--target", choices=["all", "logseq", "notion"], default="all"
+        "--target", choices=["all", "logseq", "todoist"], default="all"
     )
     s.set_defaults(func=cmd_sync)
 
@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="pull status from remotes (mark local done if remote done)",
     )
     rc.add_argument(
-        "--target", choices=["all", "logseq", "notion"], default="all"
+        "--target", choices=["all", "logseq", "todoist"], default="all"
     )
     rc.set_defaults(func=cmd_reconcile)
 
