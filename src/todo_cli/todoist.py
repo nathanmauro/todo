@@ -63,6 +63,33 @@ def _find_section_id(tok: str, project_id: str, name: str) -> str | None:
     return None
 
 
+def ensure_label(tok: str, name: str) -> None:
+    """Create the label if it does not exist (dynamic project tags).
+
+    Best-effort: any API hiccup is swallowed so capture never fails on this.
+    """
+    try:
+        req = urllib.request.Request(
+            f"{TODOIST_API}/labels?limit=200",
+            method="GET",
+            headers={"Authorization": f"Bearer {tok}"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        rows = data.get("results", data) if isinstance(data, dict) else data
+        if any(l["name"] == name for l in rows):
+            return
+        create = urllib.request.Request(
+            f"{TODOIST_API}/labels",
+            data=json.dumps({"name": name}).encode(),
+            method="POST",
+            headers=_headers(tok),
+        )
+        urllib.request.urlopen(create, timeout=15)
+    except (urllib.error.URLError, urllib.error.HTTPError):
+        pass
+
+
 def create_task(
     tok: str,
     text: str,
@@ -114,7 +141,7 @@ def sync(entries: list[TodoEntry]) -> int:
         print("todoist: nothing to sync")
         return 0
 
-    section_cache: dict[str, str | None] = {}
+    ensured: set[str] = set()
     created = 0
     failed = 0
     for e in pending:
@@ -125,15 +152,13 @@ def sync(entries: list[TodoEntry]) -> int:
         if e.source:
             labels.append(e.source)
 
+        # Project association is a label now (Inbox/Current Work have no sections).
+        # Auto-create the label so starting a new project just works.
         if e.project:
-            if e.project not in section_cache:
-                try:
-                    section_cache[e.project] = _find_section_id(
-                        tok, project_id, e.project
-                    )
-                except (urllib.error.URLError, urllib.error.HTTPError):
-                    section_cache[e.project] = None
-            section_id = section_cache.get(e.project)
+            labels.append(e.project)
+            if e.project not in ensured:
+                ensure_label(tok, e.project)
+                ensured.add(e.project)
 
         try:
             task = create_task(
