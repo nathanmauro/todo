@@ -12,6 +12,8 @@ from .commands import (
     cmd_done,
     cmd_edit,
     cmd_ls,
+    cmd_note,
+    cmd_notion_sync,
     cmd_pull,
     cmd_reconcile,
     cmd_rm,
@@ -72,6 +74,28 @@ def build_parser() -> argparse.ArgumentParser:
         "--target", choices=["all", "logseq", "todoist"], default="all"
     )
     rc.set_defaults(func=cmd_reconcile)
+
+    nt = sub.add_parser(
+        "note", help="append a free-form note to today's Logseq journal"
+    )
+    nt.add_argument("text", nargs="+")
+    nt.set_defaults(func=cmd_note)
+
+    ns = sub.add_parser(
+        "notion-sync",
+        help="pull mobile captures from the Notion Capture Inbox into today's journal",
+    )
+    ns.add_argument(
+        "--pull-only",
+        action="store_true",
+        help="don't push pulled tasks to Todoist (journal only)",
+    )
+    ns.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show classifier placement for each capture without writing or marking",
+    )
+    ns.set_defaults(func=cmd_notion_sync)
 
     doc = sub.add_parser("doctor", help="check setup")
     doc.set_defaults(func=cmd_doctor)

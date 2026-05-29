@@ -115,6 +115,24 @@ def fetch_task(tok: str, task_id: str) -> dict:
         return json.loads(resp.read())
 
 
+def complete_task(tok: str, task_id: str) -> None:
+    """Close a task in Todoist (POST /tasks/{id}/close → 204).
+
+    For a non-recurring task close == done. For a recurring task close
+    completes the *current occurrence* and advances the due date (the task
+    stays active); `mirror` then reopens the local row on the next pull, so a
+    recurring task tracks Todoist's next occurrence. Raises on HTTP/network
+    error so the caller decides whether a 404 (already gone) counts as success.
+    """
+    req = urllib.request.Request(
+        f"{TODOIST_API}/tasks/{task_id}/close",
+        data=b"",
+        method="POST",
+        headers=_headers(tok),
+    )
+    urllib.request.urlopen(req, timeout=15)
+
+
 def sync(entries: list[TodoEntry]) -> int:
     tok = token()
     if not tok:
@@ -170,7 +188,9 @@ def sync(entries: list[TodoEntry]) -> int:
             log(f"todoist fail id={e.id} code={exc.code} body={body[:500]}")
             failed += 1
             continue
-        except urllib.error.URLError as exc:
+        except OSError as exc:
+            # URLError, socket timeout, connection reset — all OSError. Skip
+            # this row; created rows already stamped still get written.
             print(f"todoist: {e.short_id} network error: {exc}")
             failed += 1
             continue
@@ -183,9 +203,64 @@ def sync(entries: list[TodoEntry]) -> int:
         )
         created += 1
 
-    print(f"todoist: created {created}, failed {failed}")
-    log(f"todoist sync created={created} failed={failed}")
-    return 0 if failed == 0 else 1
+    # Outbound completion flush: close anything done locally but still open in
+    # Todoist (offline `done`s, failed inline pushes). This is what makes
+    # `todo sync` the catch-up for "done here -> done there".
+    closed, close_failed = push_completions(entries, tok)
+
+    print(f"todoist: created {created}, closed {closed}, failed {failed}")
+    log(
+        f"todoist sync created={created} closed={closed} "
+        f"failed={failed} close_failed={close_failed}"
+    )
+    return 0 if (failed + close_failed) == 0 else 1
+
+
+def push_completions(
+    entries: list[TodoEntry], tok: str | None = None
+) -> tuple[int, int]:
+    """Close in Todoist every locally-completed row not yet closed there.
+
+    The outbound completion leg of "done here -> done there": acts on rows that
+    are `status == "done"`, carry a `task_id`, and have no `closed_ts` yet
+    (rows flipped done *by* Todoist via reconcile/mirror are already stamped, so
+    they're skipped — no echo). A 404 means the task is already gone, which is
+    success. Network/HTTP errors leave `closed_ts` unset so the next sync
+    retries. Returns (closed, failed). Silent: callers own the summary line.
+    """
+    tok = tok or token()
+    if not tok:
+        return (0, 0)
+    closed = 0
+    failed = 0
+    for e in entries:
+        if e.status != "done":
+            continue
+        st = e.sync.todoist
+        if not st or not st.task_id or st.closed_ts:
+            continue
+        try:
+            complete_task(tok, st.task_id)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                st.closed_ts = now_iso()
+                closed += 1
+                continue
+            print(f"todoist: close {e.short_id} FAIL {exc.code}")
+            log(f"todoist close fail id={e.id} code={exc.code}")
+            failed += 1
+            continue
+        except OSError as exc:
+            # URLError, socket timeout (TimeoutError), connection reset — all
+            # OSError subclasses. Leave closed_ts unset so the next sync
+            # retries; crucially, never let this escape and abort the caller's
+            # write_all (which would lose the local completion).
+            log(f"todoist close net err id={e.id} {exc}")
+            failed += 1
+            continue
+        st.closed_ts = now_iso()
+        closed += 1
+    return (closed, failed)
 
 
 def reconcile(entries: list[TodoEntry]) -> int:
@@ -210,6 +285,7 @@ def reconcile(entries: list[TodoEntry]) -> int:
                 e.status = "done"
                 e.done_ts = now_iso()
                 e.done_source = "todoist"
+                e.sync.todoist.closed_ts = now_iso()  # already closed there
                 flipped += 1
                 continue
             print(f"todoist: {e.short_id} FAIL {exc.code}")
@@ -223,6 +299,7 @@ def reconcile(entries: list[TodoEntry]) -> int:
             e.status = "done"
             e.done_ts = now_iso()
             e.done_source = "todoist"
+            e.sync.todoist.closed_ts = now_iso()  # already closed there
             flipped += 1
 
     print(
@@ -312,8 +389,11 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
     Todoist is the source of truth: new remote tasks are imported as
     `origin="todoist"` rows; existing rows (matched by task_id) get their
     text/due/project refreshed; mirrored rows whose task vanished from the
-    active set are flipped to done. Status of locally-originated rows is left
-    to `sync`/`reconcile`/`done` — this never reopens a locally-done task.
+    active set are flipped to done. Because Todoist owns mirrored rows, a
+    mirrored row that is `done` locally but reappears in the active set
+    (un-completed on web/phone, or a recurring occurrence that advanced) is
+    reopened to track Todoist. Status of *locally-originated* rows is left to
+    `sync`/`reconcile`/`done` — this never reopens a locally-done task.
     """
     tok = token()
     if not tok:
@@ -342,7 +422,7 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
         if e.sync.todoist and e.sync.todoist.task_id
     }
     seen: set[str] = set()
-    created = updated = flipped = 0
+    created = updated = flipped = reopened = 0
 
     for t in tasks:
         tid = str(t["id"])
@@ -354,14 +434,27 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
 
         if existing is not None:
             changed = existing.text != content or existing.due != due
+            # Todoist owns mirrored rows: a done mirror back in the active set
+            # was un-completed remotely (or is a recurring task that advanced),
+            # so follow Todoist and reopen. Only mirrored rows — never a
+            # locally-done task.
+            reopen = existing.origin == "todoist" and existing.status == "done"
             if changed:
                 updated += 1
+            if reopen:
+                reopened += 1
             if not dry_run:
                 existing.text = content
                 existing.due = due
                 if existing.sync.todoist:
                     existing.sync.todoist.project_id = t.get("project_id")
                 existing.mirrored_at = now_iso()
+                if reopen:
+                    existing.status = "open"
+                    existing.done_ts = None
+                    existing.done_source = None
+                    if existing.sync.todoist:
+                        existing.sync.todoist.closed_ts = None
             continue
 
         created += 1
@@ -398,15 +491,17 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
                 e.status = "done"
                 e.done_ts = now_iso()
                 e.done_source = "todoist"
+                st.closed_ts = now_iso()  # gone from Todoist = already closed
 
     prefix = "todoist pull (dry-run):" if dry_run else "todoist pull:"
     print(
         f"{prefix} {len(tasks)} in-scope tasks; "
-        f"created {created}, updated {updated}, completed {flipped}"
+        f"created {created}, updated {updated}, completed {flipped}, "
+        f"reopened {reopened}"
     )
     if not dry_run:
         log(
             f"todoist pull created={created} updated={updated} "
-            f"completed={flipped} scope_tasks={len(tasks)}"
+            f"completed={flipped} reopened={reopened} scope_tasks={len(tasks)}"
         )
     return 0

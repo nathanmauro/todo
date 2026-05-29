@@ -39,6 +39,10 @@ class TodoistSync(BaseModel):
     url: str | None = None
     ts: str
     project_id: str | None = None
+    # Set once this row's completion has reached Todoist (the task is closed
+    # there). Gates the outbound completion push so a done row is never
+    # re-closed and inbound-flipped rows are never pushed back.
+    closed_ts: str | None = None
 
 
 class SyncState(BaseModel):

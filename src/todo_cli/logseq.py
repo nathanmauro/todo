@@ -12,6 +12,9 @@ from .storage import log
 
 _DONE_RE = re.compile(r"^\s*-\s+(DONE|CANCELED|CANCELLED)\b", re.IGNORECASE)
 _ARCHIVED_RE = re.compile(r"^\s*-\s+\[x\]", re.IGNORECASE)
+# Open task-marker forms we rewrite to DONE on outbound completion.
+_OPEN_KW_RE = re.compile(r"^(\s*-\s+)(TODO|DOING|NOW|LATER|WAITING)\b", re.IGNORECASE)
+_OPEN_BOX_RE = re.compile(r"^(\s*-\s+)\[ \]")
 
 
 def journal_path(when: dt.date | None = None) -> Path:
@@ -28,14 +31,113 @@ def marker(entry: TodoEntry) -> str:
     return f"<!-- todo:{entry.id} -->"
 
 
+def append_lines(lines: list[str], when: dt.date | None = None) -> Path:
+    """Append already-formatted journal blocks to a day's journal.
+
+    Each item in `lines` is a full block including its leading `- `. Adds a
+    leading newline if the file does not already end in one. Returns the path.
+    Shared by `notion-sync` and `note`; callers handle idempotency themselves.
+    """
+    journal = journal_path(when)
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    existing = journal.read_text() if journal.exists() else ""
+    if not lines:
+        return journal
+    sep = "" if not existing or existing.endswith("\n") else "\n"
+    with journal.open("a") as f:
+        f.write(sep + "\n".join(lines) + "\n")
+    return journal
+
+
+def pages_dir() -> Path:
+    return LOGSEQ_GRAPH / "pages"
+
+
+def file_for_page(name: str) -> str:
+    """Logseq page name -> filename (triple-underscore namespaces). 'prj/X' -> 'prj___X.md'."""
+    return name.replace("/", "___") + ".md"
+
+
+def page_index() -> dict[str, str]:
+    """Map existing Logseq page names -> filename, as PARA-filing destinations.
+
+    Excludes auto-generated agent-log pages (claude*/…) — captures must never be
+    filed into a session/memory log. Journals are excluded by living elsewhere.
+    """
+    out: dict[str, str] = {}
+    d = pages_dir()
+    if not d.exists():
+        return out
+    for p in sorted(d.glob("*.md")):
+        fn = p.name
+        if fn.startswith("claude"):  # claude___, claude-memory___, claude-research___
+            continue
+        name = fn[:-3].replace("___", "/")  # strip .md, restore namespace
+        out[name] = fn
+    return out
+
+
+def append_to_page(filename: str, block: str, marker: str | None = None,
+                    create_props: str | None = None) -> Path | None:
+    """Append one outliner `block` to pages/<filename> (create if missing).
+
+    `marker` (the trailing `<!-- nx:… -->`) gives an in-file idempotency guard:
+    if it is already present the append is skipped. `create_props` is a page
+    properties header (no leading dash) written only when the file is new.
+    Returns the path, or None if skipped as a duplicate.
+    """
+    page = pages_dir() / filename
+    page.parent.mkdir(parents=True, exist_ok=True)
+    existing = page.read_text() if page.exists() else ""
+    if marker and marker in existing:
+        return None
+    head = ""
+    if not existing and create_props:
+        head = create_props.rstrip("\n") + "\n"
+    sep = "" if not existing or existing.endswith("\n") else "\n"
+    with page.open("a") as f:
+        f.write(head + sep + block + "\n")
+    log(f"logseq filed to page={filename}")
+    return page
+
+
+def note(text: str, src_id: str) -> int:
+    """Append a free-form `- <text>` note to today's journal (local-only).
+
+    `src_id` is the entry/capture id used to build a grep-able idempotency
+    marker so re-runs never duplicate the block.
+    """
+    text = text.strip()
+    if not text:
+        return 0
+    mk = f"<!-- note:{src_id} -->"
+    journal = journal_path()
+    existing = journal.read_text() if journal.exists() else ""
+    if mk in existing:
+        return 0
+    append_lines([f"- {text} {mk}"])
+    log(f"logseq note appended id={src_id} file={journal}")
+    return 1
+
+
+def append_journal_dedup(block: str, marker: str) -> bool:
+    """Append a pre-formatted block to today's journal unless `marker` is present.
+
+    Returns True if appended, False if the marker already existed (idempotent).
+    """
+    journal = journal_path()
+    existing = journal.read_text() if journal.exists() else ""
+    if marker and marker in existing:
+        return False
+    append_lines([block])
+    return True
+
+
 def sync(entries: list[TodoEntry]) -> int:
     journal = journal_path()
     journal.parent.mkdir(parents=True, exist_ok=True)
     existing = journal.read_text() if journal.exists() else ""
     pending = [e for e in entries if e.status == "open" and e.sync.logseq is None]
-    if not pending:
-        print("logseq: nothing to sync")
-        return 0
     appended = 0
     new_blocks: list[str] = []
     for e in pending:
@@ -51,9 +153,65 @@ def sync(entries: list[TodoEntry]) -> int:
         sep = "" if not existing or existing.endswith("\n") else "\n"
         with journal.open("a") as f:
             f.write(sep + "\n".join(new_blocks) + "\n")
-    print(f"logseq: appended {appended} → {journal}")
-    log(f"logseq sync appended={appended} file={journal}")
+    # Outbound completion flush: flip any already-synced row that's now done.
+    completed = complete(entries)
+    print(f"logseq: appended {appended}, completed {completed} → {journal}")
+    log(f"logseq sync appended={appended} completed={completed} file={journal}")
     return 0
+
+
+def complete(entries: list[TodoEntry]) -> int:
+    """Flip journal lines to DONE for rows completed locally (outbound leg).
+
+    The Logseq half of "done here -> done there": for each `status == "done"`
+    row that carries a Logseq marker, find the block(s) whose *trailing* marker
+    is that row's marker and rewrite the leading `- TODO`/`- DOING`/... (or
+    `- [ ]`) to `- DONE` (or `- [x]`). Idempotent — a block already DONE/`[x]`,
+    or no longer a task line, is left untouched. Counts one flip per entry
+    (matching `reconcile`'s per-entry view), not per line. Reads/writes with
+    `newline=""` so untouched CRLF/mixed line endings survive verbatim.
+    Returns the number of entries flipped. Silent: callers own the summary.
+    """
+    flipped = 0
+    by_file: dict[str, list[TodoEntry]] = {}
+    for e in entries:
+        if e.status != "done" or e.sync.logseq is None:
+            continue
+        by_file.setdefault(e.sync.logseq.file, []).append(e)
+    for path, batch in by_file.items():
+        p = Path(path)
+        if not p.exists():
+            continue
+        with p.open("r", newline="") as f:  # newline="" disables \r\n translation
+            lines = f.read().splitlines(keepends=True)
+        changed = False
+        for e in batch:
+            mk = e.sync.logseq.marker if e.sync.logseq else None
+            if not mk:
+                continue
+            hit = False
+            for i, ln in enumerate(lines):
+                # Anchor to the line's OWN trailing marker so a marker quoted in
+                # another task's body never flips the wrong block.
+                if not ln.rstrip("\r\n").endswith(mk):
+                    continue
+                if _DONE_RE.match(ln) or _ARCHIVED_RE.match(ln):
+                    continue  # already done — idempotent
+                new = _OPEN_KW_RE.sub(r"\1DONE", ln, count=1)
+                if new == ln:
+                    new = _OPEN_BOX_RE.sub(r"\1[x]", ln, count=1)
+                if new != ln:
+                    lines[i] = new
+                    changed = True
+                    hit = True
+            if hit:
+                flipped += 1
+        if changed:
+            with p.open("w", newline="") as f:  # write verbatim, no translation
+                f.write("".join(lines))
+    if flipped:
+        log(f"logseq complete flipped={flipped}")
+    return flipped
 
 
 def reconcile(entries: list[TodoEntry]) -> int:
@@ -88,6 +246,10 @@ def reconcile(entries: list[TodoEntry]) -> int:
                 e.status = "done"
                 e.done_ts = now_iso()
                 e.done_source = "logseq"
+                # Deliberately do NOT stamp sync.todoist.closed_ts here: a task
+                # completed in Logseq *should* propagate out to Todoist on the
+                # next push (done here -> done there). If Todoist already had it
+                # done, the close returns 404 and is treated as already-closed.
                 flipped += 1
     print(
         f"logseq reconcile: checked {checked}, flipped {flipped}, missing {missing}"

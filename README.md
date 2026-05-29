@@ -1,6 +1,6 @@
 # todo
 
-Local-first todo capture CLI. Store in `~/.todo/todos.jsonl`. Push to Logseq journal + Todoist. Pull status back with `reconcile`.
+Local-first todo capture CLI. Store in `~/.todo/todos.jsonl`. Push to Logseq journal + Todoist. Completion is bidirectional — finish a task anywhere and it converges everywhere: `done` here closes it there; `pull`/`reconcile` bring remote completions back here.
 
 ## Install
 
@@ -15,7 +15,7 @@ Edits to `src/todo_cli/cli.py` apply immediately via the `todo` shim in `~/.loca
 ```
 todo add "text" [--due YYYY-MM-DD] [--source ...] [--project ...]
 todo ls   [--all|--open|--done]
-todo done <id-prefix>
+todo done <id-prefix>          # closes it in Todoist + flips its Logseq line to DONE
 todo rm   <id-prefix>
 todo edit
 todo sync       [--target all|logseq|todoist]
@@ -51,13 +51,22 @@ Build an Apple Shortcut named `Todo`:
 
 Use: `⌘Space` → `todo` → `↵` → type text → `↵`.
 
+## Completion sync ("done here → done there")
+
+`status` is the single source of truth for done-ness, and completion converges across all three surfaces:
+
+- **Inbound** (remote → local): `reconcile` and `pull` flip a local row to `done` when its Todoist task is completed/deleted or its Logseq block is marked done.
+- **Outbound** (local → remote): `done` immediately closes the Todoist task (`POST /tasks/{id}/close`) and rewrites the Logseq block to `- DONE`, best-effort. If a remote is unreachable (offline, no token) the local completion still succeeds; the next `todo sync` flushes whatever didn't land.
+
+A `sync.todoist.closed_ts` stamp gates the outbound push so a completion is pushed exactly once and rows flipped done *by* a remote (via `reconcile`/`pull`) are never echoed back out. The two directions converge to the same state and never oscillate.
+
 ## Logseq
 
-Appends `- TODO <text> <!-- todo:<id> --></text>` block to today's journal `<graph>/journals/YYYY_MM_DD.md`. `reconcile` flips local to done when block starts with `- DONE` / `- CANCELED` / `- [x]`.
+Appends `- TODO <text> <!-- todo:<id> --></text>` block to today's journal `<graph>/journals/YYYY_MM_DD.md`. `reconcile` flips local to done when the block starts with `- DONE` / `- CANCELED` / `- [x]`; conversely, completing a task locally rewrites its `- TODO` / `- DOING` / `- [ ]` block to `- DONE` / `- [x]` (idempotent, matched by marker).
 
 ## Todoist
 
-Creates a task via Todoist API v1. Tasks land in the default capture project (Inbox, resolved from `~/Documents/cockpit/todoist-structure.json`, overridable with `TODO_TODOIST_PROJECT_ID`). `--source` and `--project` are attached as **labels** — not sections — and a missing project label is auto-created on first use. `reconcile` flips local to done when the remote task is completed or deleted (404).
+Creates a task via Todoist API v1. Tasks land in the default capture project (Inbox, resolved from `~/Documents/cockpit/todoist-structure.json`, overridable with `TODO_TODOIST_PROJECT_ID`). `--source` and `--project` are attached as **labels** — not sections — and a missing project label is auto-created on first use. `reconcile` flips local to done when the remote task is completed or deleted (404); completing a task locally closes it remotely (a 404 counts as already-closed). `todo sync` both creates new open tasks and flushes pending completions.
 
 ## Mirror (`todo pull`)
 
@@ -81,7 +90,7 @@ Scope is read from the `mirror` block of `~/Documents/cockpit/todoist-structure.
   "mirrored_at": null | "ISO-8601",
   "sync": {
     "logseq": null | {"file": "...", "marker": "...", "ts": "..."},
-    "todoist": null | {"task_id": "...", "url": "...", "ts": "...", "project_id": "..."}
+    "todoist": null | {"task_id": "...", "url": "...", "ts": "...", "project_id": "...", "closed_ts": null | "ISO-8601"}
   }
 }
 ```
