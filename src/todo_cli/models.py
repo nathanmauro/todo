@@ -38,6 +38,7 @@ class TodoistSync(BaseModel):
     task_id: str
     url: str | None = None
     ts: str
+    project_id: str | None = None
 
 
 class SyncState(BaseModel):
@@ -59,6 +60,10 @@ class TodoEntry(BaseModel):
     due: str | None = None
     done_ts: str | None = None
     done_source: str | None = None
+    # "todoist" = mirrored in from Todoist (read-only); None/other = locally
+    # originated. The push channel never re-pushes a "todoist" row.
+    origin: str | None = None
+    mirrored_at: str | None = None
 
     @property
     def short_id(self) -> str:

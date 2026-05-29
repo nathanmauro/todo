@@ -12,6 +12,7 @@ from .commands import (
     cmd_done,
     cmd_edit,
     cmd_ls,
+    cmd_pull,
     cmd_reconcile,
     cmd_rm,
     cmd_sync,
@@ -51,6 +52,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--target", choices=["all", "logseq", "todoist"], default="all"
     )
     s.set_defaults(func=cmd_sync)
+
+    pull = sub.add_parser(
+        "pull",
+        help="mirror Todoist tasks into the local store (Todoist is source of truth)",
+    )
+    pull.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show what would change without writing",
+    )
+    pull.set_defaults(func=cmd_pull)
 
     rc = sub.add_parser(
         "reconcile",

@@ -7,7 +7,13 @@ import subprocess
 import sys
 
 from . import logseq, todoist
-from .config import LOGSEQ_GRAPH, TODOIST_PROJECT_ID, TODO_DIR, TODOS_FILE
+from .config import (
+    LOGSEQ_GRAPH,
+    TODOIST_PROJECT_ID,
+    TODO_DIR,
+    TODOS_FILE,
+    mirror_policy,
+)
 from .formatting import human_ago, sync_badges
 from .models import TodoEntry, now_iso
 from .storage import (
@@ -102,6 +108,14 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_pull(args: argparse.Namespace) -> int:
+    entries = load_all()
+    rc = todoist.mirror(entries, dry_run=args.dry_run)
+    if not args.dry_run:
+        write_all(entries)
+    return rc
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     entries = load_all()
     rc = 0
@@ -129,4 +143,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if not tok:
         ok = False
     print(f"todoist project: {TODOIST_PROJECT_ID}")
+    pol = mirror_policy()
+    print(
+        f"mirror policy: exclude_shared={pol['exclude_shared']} "
+        f"exclude_ids={pol['exclude_project_ids'] or '[]'}"
+    )
     return 0 if ok else 1

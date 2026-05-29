@@ -5,9 +5,16 @@ import json
 import os
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 
-from .config import KEYCHAIN_SERVICE, TODOIST_API, TODOIST_PROJECT_ID
+from .config import (
+    KEYCHAIN_SERVICE,
+    TODOIST_API,
+    TODOIST_PROJECT_ID,
+    mirror_policy,
+    taxonomy_labels,
+)
 from .models import TodoistSync, TodoEntry, now_iso
 from .storage import log
 
@@ -117,7 +124,16 @@ def sync(entries: list[TodoEntry]) -> int:
             "  (get from https://app.todoist.com/app/settings/integrations/developer)"
         )
         return 1
-    pending = [e for e in entries if e.status == "open" and e.sync.todoist is None]
+    # Never re-push a row that was mirrored in from Todoist. (Imported rows
+    # already carry a task_id, so `sync.todoist is None` excludes them too;
+    # the origin check is explicit defense against an echo loop.)
+    pending = [
+        e
+        for e in entries
+        if e.status == "open"
+        and e.sync.todoist is None
+        and e.origin != "todoist"
+    ]
     if not pending:
         print("todoist: nothing to sync")
         return 0
@@ -217,3 +233,180 @@ def reconcile(entries: list[TodoEntry]) -> int:
         f"todoist reconcile checked={checked} flipped={flipped} failed={failed}"
     )
     return 0 if failed == 0 else 1
+
+
+# --- inbound mirror (Todoist -> local) ---------------------------------------
+
+
+def _get(tok: str, path: str) -> dict | list:
+    req = urllib.request.Request(
+        f"{TODOIST_API}{path}",
+        method="GET",
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read())
+
+
+def _get_paginated(tok: str, base: str) -> list[dict]:
+    """Walk a v1 list endpoint's {results, next_cursor} pages into one list."""
+    out: list[dict] = []
+    cursor: str | None = None
+    sep = "&" if "?" in base else "?"
+    while True:
+        path = base
+        if cursor:
+            path = f"{base}{sep}cursor={urllib.parse.quote(cursor)}"
+        data = _get(tok, path)
+        if isinstance(data, dict):
+            out.extend(data.get("results", []))
+            cursor = data.get("next_cursor")
+        else:
+            out.extend(data)
+            cursor = None
+        if not cursor:
+            return out
+
+
+def list_projects(tok: str) -> list[dict]:
+    return _get_paginated(tok, "/projects?limit=200")
+
+
+def list_active_tasks(tok: str) -> list[dict]:
+    """All active (unchecked) tasks across the account, paginated."""
+    return _get_paginated(tok, "/tasks?limit=200")
+
+
+def _due_str(due: object) -> str | None:
+    if not due:
+        return None
+    if isinstance(due, dict):
+        return due.get("date") or due.get("string")
+    return str(due)
+
+
+def _first_in(labels: list[str], known: set[str]) -> str | None:
+    for label in labels:
+        if label in known:
+            return label
+    return None
+
+
+def _included_project_ids(projects: list[dict], policy: dict) -> set[str]:
+    excluded = set(policy["exclude_project_ids"])
+    out: set[str] = set()
+    for p in projects:
+        if p.get("is_deleted") or p.get("is_archived"):
+            continue
+        if policy["exclude_shared"] and p.get("is_shared"):
+            continue
+        if p["id"] in excluded:
+            continue
+        out.add(p["id"])
+    return out
+
+
+def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
+    """Mirror in-scope Todoist tasks into the local store.
+
+    Todoist is the source of truth: new remote tasks are imported as
+    `origin="todoist"` rows; existing rows (matched by task_id) get their
+    text/due/project refreshed; mirrored rows whose task vanished from the
+    active set are flipped to done. Status of locally-originated rows is left
+    to `sync`/`reconcile`/`done` — this never reopens a locally-done task.
+    """
+    tok = token()
+    if not tok:
+        print("todoist: no token; skipping pull")
+        return 1
+
+    policy = mirror_policy()
+    tax = taxonomy_labels()
+    src_labels = set(tax["source"])
+    proj_labels = set(tax["projects"])
+
+    try:
+        included = _included_project_ids(list_projects(tok), policy)
+        tasks = [
+            t
+            for t in list_active_tasks(tok)
+            if t.get("project_id") in included and not t.get("is_deleted")
+        ]
+    except (urllib.error.URLError, urllib.error.HTTPError) as exc:
+        print(f"todoist pull: list failed: {exc}")
+        return 1
+
+    by_task = {
+        e.sync.todoist.task_id: e
+        for e in entries
+        if e.sync.todoist and e.sync.todoist.task_id
+    }
+    seen: set[str] = set()
+    created = updated = flipped = 0
+
+    for t in tasks:
+        tid = str(t["id"])
+        seen.add(tid)
+        content = t.get("content", "")
+        due = _due_str(t.get("due"))
+        labels = t.get("labels") or []
+        existing = by_task.get(tid)
+
+        if existing is not None:
+            changed = existing.text != content or existing.due != due
+            if changed:
+                updated += 1
+            if not dry_run:
+                existing.text = content
+                existing.due = due
+                if existing.sync.todoist:
+                    existing.sync.todoist.project_id = t.get("project_id")
+                existing.mirrored_at = now_iso()
+            continue
+
+        created += 1
+        if dry_run:
+            continue
+        e = TodoEntry(
+            text=content,
+            status="open",
+            source=_first_in(labels, src_labels) or "todoist",
+            project=_first_in(labels, proj_labels),
+            origin="todoist",
+            due=due,
+            mirrored_at=now_iso(),
+        )
+        e.sync.todoist = TodoistSync(
+            task_id=tid,
+            url=f"https://app.todoist.com/app/task/{tid}",
+            ts=now_iso(),
+            project_id=t.get("project_id"),
+        )
+        entries.append(e)
+
+    # Completion/deletion sweep: a mirrored row whose task is no longer in the
+    # active set of an in-scope project was completed or deleted remotely.
+    for e in entries:
+        if e.origin != "todoist" or e.status != "open":
+            continue
+        st = e.sync.todoist
+        if not st or not st.task_id or st.project_id not in included:
+            continue
+        if st.task_id not in seen:
+            flipped += 1
+            if not dry_run:
+                e.status = "done"
+                e.done_ts = now_iso()
+                e.done_source = "todoist"
+
+    prefix = "todoist pull (dry-run):" if dry_run else "todoist pull:"
+    print(
+        f"{prefix} {len(tasks)} in-scope tasks; "
+        f"created {created}, updated {updated}, completed {flipped}"
+    )
+    if not dry_run:
+        log(
+            f"todoist pull created={created} updated={updated} "
+            f"completed={flipped} scope_tasks={len(tasks)}"
+        )
+    return 0
