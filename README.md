@@ -20,6 +20,7 @@ todo rm   <id-prefix>
 todo edit
 todo sync       [--target all|logseq|todoist]
 todo reconcile  [--target all|logseq|todoist]
+todo pull       [--dry-run]
 todo doctor
 ```
 
@@ -58,6 +59,12 @@ Appends `- TODO <text> <!-- todo:<id> --></text>` block to today's journal `<gra
 
 Creates a task via Todoist API v1. Tasks land in the default capture project (Inbox, resolved from `~/Documents/cockpit/todoist-structure.json`, overridable with `TODO_TODOIST_PROJECT_ID`). `--source` and `--project` are attached as **labels** — not sections — and a missing project label is auto-created on first use. `reconcile` flips local to done when the remote task is completed or deleted (404).
 
+## Mirror (`todo pull`)
+
+`pull` makes Todoist the source of truth and the local store a read-only mirror. It lists in-scope Todoist tasks and upserts them into `todos.jsonl` keyed on `sync.todoist.task_id`: tasks created here (CLI/agents) update in place, and tasks created elsewhere (phone, web, MCP) are imported as `origin: "todoist"` rows. Imported rows are never pushed back (echo-loop guard), and a mirrored task that disappears from Todoist's active set is flipped to done.
+
+Scope is read from the `mirror` block of `~/Documents/cockpit/todoist-structure.json` (default: every personal project, drop shared/workspace projects like Team Inbox, active tasks only). `--dry-run` reports what would change without writing.
+
 ## Storage
 
 `~/.todo/todos.jsonl` — one JSON object per line, append-only logical model (file rewritten on edits). Per-entry shape:
@@ -68,11 +75,15 @@ Creates a task via Todoist API v1. Tasks land in the default capture project (In
   "ts": "ISO-8601",
   "text": "...",
   "status": "open|done",
-  "source": "cli|spotlight|...",
+  "source": "cli|claude|codex|todoist|...",
   "project": "bin|todo|...",
+  "origin": null | "todoist",
+  "mirrored_at": null | "ISO-8601",
   "sync": {
     "logseq": null | {"file": "...", "marker": "...", "ts": "..."},
-    "todoist": null | {"task_id": "...", "url": "...", "ts": "..."}
+    "todoist": null | {"task_id": "...", "url": "...", "ts": "...", "project_id": "..."}
   }
 }
 ```
+
+`origin: "todoist"` marks a row mirrored in by `pull`; such rows are never pushed back to Todoist.
