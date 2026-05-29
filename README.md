@@ -29,7 +29,7 @@ Env overrides:
 
 - `TODO_DIR` — store dir (default `~/.todo`)
 - `TODO_LOGSEQ_GRAPH` — Logseq graph root (default `~/Notes`)
-- `TODO_TODOIST_PROJECT_ID` — Todoist project to create tasks in
+- `TODO_TODOIST_PROJECT_ID` — Todoist project to create tasks in (default: Inbox, resolved from `~/Documents/cockpit/todoist-structure.json`)
 - `TODOIST_TOKEN` — overrides Keychain lookup
 
 Todoist token in Keychain:
@@ -56,7 +56,7 @@ Appends `- TODO <text> <!-- todo:<id> --></text>` block to today's journal `<gra
 
 ## Todoist
 
-Creates a task in the configured project via Todoist REST API v2. When `--project` is set, looks up a matching section name and routes the task there. Labels are set from `--source`. `reconcile` flips local to done when the remote task is completed or deleted (404).
+Creates a task via Todoist API v1. Tasks land in the default capture project (Inbox, resolved from `~/Documents/cockpit/todoist-structure.json`, overridable with `TODO_TODOIST_PROJECT_ID`). `--source` and `--project` are attached as **labels** — not sections — and a missing project label is auto-created on first use. `reconcile` flips local to done when the remote task is completed or deleted (404).
 
 ## Storage
 

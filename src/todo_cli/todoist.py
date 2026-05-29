@@ -5,7 +5,6 @@ import json
 import os
 import subprocess
 import urllib.error
-import urllib.parse
 import urllib.request
 
 from .config import KEYCHAIN_SERVICE, TODOIST_API, TODOIST_PROJECT_ID
@@ -48,21 +47,6 @@ def _headers(tok: str) -> dict[str, str]:
     }
 
 
-def _find_section_id(tok: str, project_id: str, name: str) -> str | None:
-    query = urllib.parse.quote(name)
-    req = urllib.request.Request(
-        f"{TODOIST_API}/sections/search?query={query}&project_id={project_id}",
-        method="GET",
-        headers={"Authorization": f"Bearer {tok}"},
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        data = json.loads(resp.read())
-    for s in data.get("results", []):
-        if s["name"].lower() == name.lower():
-            return s["id"]
-    return None
-
-
 def ensure_label(tok: str, name: str) -> None:
     """Create the label if it does not exist (dynamic project tags).
 
@@ -94,15 +78,12 @@ def create_task(
     tok: str,
     text: str,
     project_id: str | None = None,
-    section_id: str | None = None,
     labels: list[str] | None = None,
     due_string: str | None = None,
 ) -> dict:
     body: dict = {"content": text}
     if project_id:
         body["project_id"] = project_id
-    if section_id:
-        body["section_id"] = section_id
     if labels:
         body["labels"] = labels
     if due_string:
@@ -146,7 +127,6 @@ def sync(entries: list[TodoEntry]) -> int:
     failed = 0
     for e in pending:
         project_id = TODOIST_PROJECT_ID
-        section_id = None
         labels = []
 
         if e.source:
@@ -165,7 +145,6 @@ def sync(entries: list[TodoEntry]) -> int:
                 tok,
                 e.text,
                 project_id=project_id,
-                section_id=section_id,
                 labels=labels if labels else None,
                 due_string=e.due,
             )
