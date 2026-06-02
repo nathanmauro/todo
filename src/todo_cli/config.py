@@ -12,6 +12,14 @@ LOG_FILE = TODO_DIR / "todo.log"
 
 LOGSEQ_GRAPH = Path(os.environ.get("TODO_LOGSEQ_GRAPH", HOME / "Notes"))
 
+# Obsidian vault — the canonical capture/memory store (plan-transition.md,
+# 2026-06-01). Phone (Telegram) and CLI captures each land as one Markdown file
+# under <vault>/captures/YYYY-MM-DD/. Override the path here when the vault moves
+# onto Google Drive for cross-device read/write — a single env flip, no code change.
+OBSIDIAN_VAULT = Path(
+    os.environ.get("TODO_OBSIDIAN_VAULT", HOME / "Notes" / "obsidian")
+)
+
 # Todoist API v1
 TODOIST_API = "https://api.todoist.com/api/v1"
 
@@ -26,7 +34,7 @@ def _structure() -> dict:
     struct = Path(
         os.environ.get(
             "TODOIST_STRUCTURE",
-            HOME / "Documents" / "cockpit" / "todoist-structure.json",
+            HOME / "Developer" / "proj" / "cockpit" / "todoist-structure.json",
         )
     )
     try:
@@ -131,6 +139,14 @@ TELEGRAM_API = "https://api.telegram.org"
 TELEGRAM_KEYCHAIN_ACCOUNT = os.environ.get("TODO_TELEGRAM_KEYCHAIN_ACCOUNT", "telegram")
 TELEGRAM_STATE = NOTION_SYNC_DIR / "telegram-state.json"
 TELEGRAM_ENABLED = os.environ.get("TODO_TELEGRAM", "1") != "0"
+# Single-user lock: comma-separated numeric chat ids allowed to drive the bot.
+# Empty = accept any chat (and the bot's reply tells you your chat_id so you can
+# lock it). A non-empty list silently drops messages from any other chat.
+TELEGRAM_ALLOWED_CHATS = [
+    c.strip()
+    for c in os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "").split(",")
+    if c.strip()
+]
 # whisper.cpp CLI for voice-note transcription (brew install whisper-cpp).
 WHISPER_BIN = os.environ.get("TODO_WHISPER_BIN", "whisper-cli")
 # ggml model path; "" disables voice transcription (text captures still work).

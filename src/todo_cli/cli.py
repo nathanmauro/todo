@@ -18,6 +18,7 @@ from .commands import (
     cmd_reconcile,
     cmd_rm,
     cmd_sync,
+    cmd_telegram_poll,
 )
 
 
@@ -96,6 +97,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="show classifier placement for each capture without writing or marking",
     )
     ns.set_defaults(func=cmd_notion_sync)
+
+    tg = sub.add_parser(
+        "telegram-poll",
+        help="poll the Telegram capture bot; file messages into the Obsidian vault",
+    )
+    tg.add_argument(
+        "--loop",
+        action="store_true",
+        help="run the long-poll daemon (launchd KeepAlive); default is one pass",
+    )
+    tg.set_defaults(func=cmd_telegram_poll)
 
     doc = sub.add_parser("doctor", help="check setup")
     doc.set_defaults(func=cmd_doctor)

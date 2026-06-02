@@ -311,6 +311,29 @@ def cmd_notion_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_telegram_poll(args: argparse.Namespace) -> int:
+    """Poll the Telegram capture bot and file messages into the Obsidian vault.
+
+    `--loop` runs the long-poll daemon (launchd KeepAlive); the default single
+    pass is handy for testing and for grabbing your chat_id from the bot's reply.
+    """
+    if not TELEGRAM_ENABLED:
+        print("telegram: disabled (TODO_TELEGRAM=0)")
+        return 0
+    if not telegram.token():
+        print(
+            "telegram: no token — store one:\n"
+            "  security add-generic-password -a telegram -s todo-cli -w "
+            "'<BOTFATHER_TOKEN>'"
+        )
+        return 1
+    if args.loop:
+        return telegram.poll_loop()
+    n = telegram.poll_once()
+    print(f"telegram: filed {n} capture(s) into the vault")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     ok = True
     print(f"store dir: {TODO_DIR}  {'OK' if TODO_DIR.exists() else 'MISSING'}")

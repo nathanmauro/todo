@@ -22,16 +22,18 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import notion
+from . import notion, obsidian, todoist
 from .config import (
     KEYCHAIN_SERVICE,
+    TELEGRAM_ALLOWED_CHATS,
     TELEGRAM_API,
     TELEGRAM_KEYCHAIN_ACCOUNT,
     TELEGRAM_STATE,
     WHISPER_BIN,
     WHISPER_MODEL,
 )
-from .storage import log
+from .models import TodoEntry, TodoistSync, now_iso
+from .storage import load_all, log, write_all
 
 
 def token() -> str | None:
@@ -172,3 +174,151 @@ def pull_into_inbox(notion_tok: str) -> int:
     if created:
         log(f"telegram pulled {created} capture(s) into Notion inbox")
     return created
+
+
+# --- Obsidian-canonical capture lane (live path, 2026-06-01) ----------------
+# A message becomes one Markdown file in the vault; tasks also push to Todoist.
+# `pull_into_inbox` above is the legacy Notion producer — kept for reference but
+# no longer scheduled (Notion is read-only reference now).
+
+_PREFIXES = {"+t": "task", "+task": "task", "+i": "idea", "+idea": "idea"}
+
+
+def classify(text: str) -> tuple[str, str]:
+    """Map a raw message to (kind, body). DEFAULT classifier = prefix parser.
+
+    "+t "/"+task " -> task, "+i "/"+idea " -> idea, anything else -> note. The
+    prefix token (and the space after it) is stripped from the body; a bare
+    "+t" with no body falls back to a plain note so an empty task is never made.
+
+    This is the SWAPPABLE SEAM: a future LLM / Black Box classifier (see the
+    vault's 06 Backlog/llm-classifier-for-telegram-captures) can replace this
+    body wholesale, and tests/test_telegram_obsidian.py pins the contract it
+    must keep.
+    """
+    stripped = text.strip()
+    head, _, rest = stripped.partition(" ")
+    kind = _PREFIXES.get(head.lower())
+    if kind and rest.strip():
+        return kind, rest.strip()
+    return "note", stripped
+
+
+def _push_task(text: str, source: str = "telegram") -> bool:
+    """Create ONE Todoist task for a captured task, without touching Logseq.
+
+    Pushes only this task (not a full `todo sync`, which would flush unrelated
+    pending rows), records it in the local store with the Todoist id stamped so
+    it is never re-pushed, and ensures the source label exists first. Swallows
+    every error — the vault file is the canonical record regardless.
+    """
+    try:
+        tok = todoist.token()
+        if not tok:
+            log("telegram task: no todoist token; saved to vault only")
+            return False
+        todoist.ensure_label(tok, source)
+        task = todoist.create_task(
+            tok, text, project_id=todoist.TODOIST_PROJECT_ID, labels=[source]
+        )
+        tid = str(task.get("id", ""))
+        entries = load_all()
+        entry = TodoEntry(text=text, source=source)
+        entry.sync.todoist = TodoistSync(
+            task_id=tid,
+            url=f"https://app.todoist.com/app/task/{tid}",
+            ts=now_iso(),
+        )
+        entries.append(entry)
+        write_all(entries)
+        return True
+    except Exception as exc:  # noqa: BLE001 — a capture must survive a bad push
+        log(f"telegram task -> todoist failed: {exc}")
+        return False
+
+
+def _route(text: str, source: str = "telegram") -> tuple[str, Path]:
+    """Classify, write the capture file, and (for tasks) push to Todoist."""
+    kind, body = classify(text)
+    path = obsidian.write_capture(body, kind=kind, source=source)
+    if kind == "task":
+        _push_task(body, source=source)
+    return kind, path
+
+
+def _reply(tok: str, chat_id, kind: str, locked: bool) -> None:
+    msg = f"filed ✓ {kind}" + (" → Todoist" if kind == "task" else "")
+    if not locked:
+        msg += (
+            f"\nchat_id {chat_id} — set TELEGRAM_ALLOWED_CHAT_ID to this "
+            "to lock the bot to you"
+        )
+    _api(tok, "sendMessage", {"chat_id": chat_id, "text": msg})
+
+
+def poll_once(long_poll: bool = False) -> int:
+    """One getUpdates pass: route each authorized message into the vault.
+
+    Advances the exactly-once offset cursor past every handled update (even
+    dropped/unauthorized ones, so they aren't reprocessed). Returns the number
+    of messages filed. `long_poll=True` waits up to 25s server-side (daemon
+    loop); False returns immediately (one-shot / cron / chat_id bootstrap).
+    """
+    tok = token()
+    if not tok:
+        return 0
+    offset = int(_state().get("offset", 0))
+    params = {
+        "timeout": 25 if long_poll else 0,
+        "allowed_updates": json.dumps(["message"]),
+    }
+    if offset:
+        params["offset"] = offset + 1
+    resp = _api(tok, "getUpdates", params)
+    if not resp or not resp.get("ok"):
+        return 0
+    locked = bool(TELEGRAM_ALLOWED_CHATS)
+    filed = 0
+    for upd in resp.get("result", []):
+        last_id = upd["update_id"]
+        msg = upd.get("message") or {}
+        chat_id = (msg.get("chat") or {}).get("id")
+        try:
+            if locked and str(chat_id) not in TELEGRAM_ALLOWED_CHATS:
+                log(f"telegram: dropped msg from unauthorized chat {chat_id}")
+                continue
+            text = message_text(msg, tok)
+            if not text:
+                continue
+            kind, _ = _route(text)
+            filed += 1
+            if chat_id is not None:
+                _reply(tok, chat_id, kind, locked)
+        finally:
+            _save_offset(last_id)  # advance past every handled update
+    if filed:
+        log(f"telegram filed {filed} capture(s) into the vault")
+    return filed
+
+
+def poll_loop() -> int:
+    """Long-poll forever (launchd KeepAlive daemon).
+
+    Idles cheaply until a token exists, so storing the BotFather token later
+    activates the bot with no reload. Never raises out: transport errors are
+    logged and retried with capped backoff.
+    """
+    import time
+
+    backoff = 5
+    while True:
+        try:
+            if not token():
+                time.sleep(60)
+                continue
+            poll_once(long_poll=True)
+            backoff = 5
+        except Exception as exc:  # noqa: BLE001 — the daemon must not die
+            log(f"telegram poll loop error: {exc}")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 120)
