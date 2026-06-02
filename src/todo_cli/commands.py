@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import os
 import subprocess
 import sys
@@ -29,6 +31,74 @@ from .storage import (
 )
 
 
+def _run_quiet(func, *args, quiet: bool = False, **kwargs):
+    if not quiet:
+        return func(*args, **kwargs)
+    with contextlib.redirect_stdout(io.StringIO()):
+        return func(*args, **kwargs)
+
+
+def _sync_outbound(entries: list[TodoEntry], *, quiet: bool = False) -> int:
+    """Push eligible local-origin task state to Logseq and Todoist."""
+    rc = 0
+    rc |= _run_quiet(logseq.sync, entries, quiet=quiet)
+    rc |= _run_quiet(todoist.sync, entries, quiet=quiet)
+    return rc
+
+
+def _refresh_task_state(
+    entries: list[TodoEntry], *, dry_run: bool = False, quiet: bool = False
+) -> int:
+    """Converge Todoist, local JSONL, and curated Logseq task blocks."""
+    if dry_run:
+        scratch = [e.model_copy(deep=True) for e in entries]
+        rc = 0
+        rc |= todoist.mirror(scratch, dry_run=True)
+        rc |= logseq.reconcile(scratch)
+        rc |= todoist.reconcile(scratch)
+        print(
+            "refresh dry-run: would sync "
+            f"{len(logseq.sync_candidates(scratch))} task(s) to Logseq, "
+            f"create {len(todoist.create_candidates(scratch))} Todoist task(s), "
+            f"close {len(todoist.completion_candidates(scratch))} Todoist task(s)"
+        )
+        return rc
+
+    rc = 0
+    rc |= _run_quiet(todoist.mirror, entries, quiet=quiet)
+    rc |= _run_quiet(logseq.reconcile, entries, quiet=quiet)
+    rc |= _run_quiet(todoist.reconcile, entries, quiet=quiet)
+    write_all(entries)
+    rc |= _sync_outbound(entries, quiet=quiet)
+    write_all(entries)
+    return rc
+
+
+def _audit_counts(entries: list[TodoEntry]) -> dict[str, int]:
+    open_rows = [e for e in entries if e.status == "open"]
+    done_rows = [e for e in entries if e.status == "done"]
+    local_open = [e for e in open_rows if e.origin != "todoist"]
+    mirrored_open = [e for e in open_rows if e.origin == "todoist"]
+    return {
+        "total": len(entries),
+        "open": len(open_rows),
+        "done": len(done_rows),
+        "origin_todoist": len([e for e in entries if e.origin == "todoist"]),
+        "open_local_missing_todoist": len(
+            [e for e in local_open if e.sync.todoist is None]
+        ),
+        "open_local_missing_logseq": len(
+            [e for e in local_open if e.sync.logseq is None]
+        ),
+        "open_mirrored_missing_logseq_expected": len(
+            [e for e in mirrored_open if e.sync.logseq is None]
+        ),
+        "notion_inbox_linked": len(
+            [e for e in entries if e.notion_inbox_id is not None]
+        ),
+    }
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     text = " ".join(args.text).strip()
     if not text:
@@ -37,6 +107,13 @@ def cmd_add(args: argparse.Namespace) -> int:
         text=text, source=args.source, due=args.due, project=args.project
     )
     append(entry)
+    if not getattr(args, "no_sync", False):
+        try:
+            entries = load_all()
+            _sync_outbound(entries)
+            write_all(entries)
+        except Exception as exc:  # noqa: BLE001 - capture already persisted
+            log(f"add sync best-effort failed id={entry.id}: {exc}")
     print(f"+ {entry.short_id}  {entry.text}")
     return 0
 
@@ -131,6 +208,11 @@ def cmd_pull(args: argparse.Namespace) -> int:
     return rc
 
 
+def cmd_refresh(args: argparse.Namespace) -> int:
+    entries = load_all()
+    return _refresh_task_state(entries, dry_run=args.dry_run)
+
+
 def cmd_reconcile(args: argparse.Namespace) -> int:
     entries = load_all()
     rc = 0
@@ -140,6 +222,29 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         rc |= todoist.reconcile(entries)
     write_all(entries)
     return rc
+
+
+def cmd_audit(args: argparse.Namespace) -> int:
+    counts = _audit_counts(load_all())
+    print("todo audit:")
+    print(f"  total: {counts['total']}")
+    print(f"  open: {counts['open']}")
+    print(f"  done: {counts['done']}")
+    print(f"  origin_todoist: {counts['origin_todoist']}")
+    print(
+        "  open_local_missing_todoist: "
+        f"{counts['open_local_missing_todoist']}"
+    )
+    print(
+        "  open_local_missing_logseq: "
+        f"{counts['open_local_missing_logseq']}"
+    )
+    print(
+        "  open_mirrored_missing_logseq_expected: "
+        f"{counts['open_mirrored_missing_logseq_expected']}"
+    )
+    print(f"  notion_inbox_linked: {counts['notion_inbox_linked']}")
+    return 0
 
 
 def cmd_note(args: argparse.Namespace) -> int:
@@ -248,9 +353,12 @@ def cmd_notion_sync(args: argparse.Namespace) -> int:
         return 1
     if not rows:
         print("notion: nothing to pull")
+        rc = 0
         if not args.dry_run:
             notion.write_state(0, 0, 0)
-        return 0
+            if not args.pull_only:
+                rc = _refresh_task_state(load_all(), quiet=True)
+        return rc
 
     entries = load_all()
     seen_inbox = {getattr(e, "notion_inbox_id", None) for e in entries}
@@ -296,19 +404,24 @@ def cmd_notion_sync(args: argparse.Namespace) -> int:
 
     if tasks_created:
         write_all(entries)
-        logseq.sync(entries)
-        if not args.pull_only:
-            todoist.sync(entries)
-        write_all(entries)
 
     marked = sum(1 for pid in to_mark if notion.mark_synced(tok, pid))
     notion.write_state(notes_filed, tasks_created, len(rows))
+    refresh_rc = 0
+    if args.pull_only:
+        # Preserve the explicit pull-only contract: task rows get journal refs,
+        # but no Todoist creates/closes are pushed by this command.
+        entries = load_all()
+        _run_quiet(logseq.sync, entries, quiet=True)
+        write_all(entries)
+    else:
+        refresh_rc = _refresh_task_state(load_all(), quiet=True)
     print(
         f"notion: pulled {notes_filed} note(s), {tasks_created} task(s)"
         f"{f' (+{tg} via Telegram)' if tg else ''}; "
         f"marked {marked}/{len(to_mark)} synced"
     )
-    return 0
+    return refresh_rc
 
 
 def cmd_telegram_poll(args: argparse.Namespace) -> int:

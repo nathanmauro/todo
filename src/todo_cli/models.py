@@ -68,6 +68,7 @@ class TodoEntry(BaseModel):
     # originated. The push channel never re-pushes a "todoist" row.
     origin: str | None = None
     mirrored_at: str | None = None
+    notion_inbox_id: str | None = None
 
     @property
     def short_id(self) -> str:

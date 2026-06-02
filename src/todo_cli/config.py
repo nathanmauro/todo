@@ -10,7 +10,10 @@ TODO_DIR = Path(os.environ.get("TODO_DIR", HOME / ".todo"))
 TODOS_FILE = TODO_DIR / "todos.jsonl"
 LOG_FILE = TODO_DIR / "todo.log"
 
-LOGSEQ_GRAPH = Path(os.environ.get("TODO_LOGSEQ_GRAPH", HOME / "Notes"))
+_LOGSEQ_GRAPH_RAW = Path(os.environ.get("TODO_LOGSEQ_GRAPH", HOME / "Notes" / "logseq")).expanduser()
+if _LOGSEQ_GRAPH_RAW == HOME / "Notes":
+    _LOGSEQ_GRAPH_RAW = HOME / "Notes" / "logseq"
+LOGSEQ_GRAPH = _LOGSEQ_GRAPH_RAW
 
 # Obsidian vault — the canonical capture/memory store (plan-transition.md,
 # 2026-06-01). Phone (Telegram) and CLI captures each land as one Markdown file

@@ -8,6 +8,7 @@ import argparse
 
 from .commands import (
     cmd_add,
+    cmd_audit,
     cmd_doctor,
     cmd_done,
     cmd_edit,
@@ -15,6 +16,7 @@ from .commands import (
     cmd_note,
     cmd_notion_sync,
     cmd_pull,
+    cmd_refresh,
     cmd_reconcile,
     cmd_rm,
     cmd_sync,
@@ -31,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--due", help="ISO date YYYY-MM-DD")
     a.add_argument("--source", default="cli")
     a.add_argument("--project", help="project tag (e.g. bin, todo, mcp-memory-agent)")
+    a.add_argument(
+        "--no-sync",
+        action="store_true",
+        help="only write the local JSONL row; defer Logseq/Todoist sync",
+    )
     a.set_defaults(func=cmd_add)
 
     ls = sub.add_parser("ls", help="list todos")
@@ -66,6 +73,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="show what would change without writing",
     )
     pull.set_defaults(func=cmd_pull)
+
+    refresh = sub.add_parser(
+        "refresh",
+        help="converge Todoist, local store, and curated Logseq task blocks",
+    )
+    refresh.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show planned convergence without writing",
+    )
+    refresh.set_defaults(func=cmd_refresh)
 
     rc = sub.add_parser(
         "reconcile",
@@ -108,6 +126,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="run the long-poll daemon (launchd KeepAlive); default is one pass",
     )
     tg.set_defaults(func=cmd_telegram_poll)
+
+    audit = sub.add_parser("audit", help="summarize local sync state")
+    audit.set_defaults(func=cmd_audit)
 
     doc = sub.add_parser("doctor", help="check setup")
     doc.set_defaults(func=cmd_doctor)

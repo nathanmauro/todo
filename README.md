@@ -13,12 +13,14 @@ Edits to `src/todo_cli/cli.py` apply immediately via the `todo` shim in `~/.loca
 ## Commands
 
 ```
-todo add "text" [--due YYYY-MM-DD] [--source ...] [--project ...]
+todo add "text" [--due YYYY-MM-DD] [--source ...] [--project ...] [--no-sync]
 todo ls   [--all|--open|--done]
 todo done <id-prefix>          # closes it in Todoist + flips its Logseq line to DONE
 todo rm   <id-prefix>
 todo edit
 todo sync       [--target all|logseq|todoist]
+todo refresh    [--dry-run]
+todo audit
 todo reconcile  [--target all|logseq|todoist]
 todo pull       [--dry-run]
 todo doctor
@@ -74,6 +76,17 @@ Creates a task via Todoist API v1. Tasks land in the default capture project (In
 
 Scope is read from the `mirror` block of `~/Documents/cockpit/todoist-structure.json` (default: every personal project, drop shared/workspace projects like Team Inbox, active tasks only). `--dry-run` reports what would change without writing.
 
+## Refresh / Audit
+
+`refresh` is the convergence command used by session hooks and the Notion drain:
+it pulls the Todoist mirror, reconciles remote completion status, writes inbound
+state, then syncs eligible local-origin tasks/completions out to Logseq and
+Todoist. Mirrored Todoist backlog rows are deliberately skipped by Logseq sync so
+the journal only gets curated local/agent/task-capture references.
+
+`audit` summarizes the local store counts and the expected gap between the
+Todoist backlog mirror and curated Logseq task refs.
+
 ## Storage
 
 `~/.todo/todos.jsonl` — one JSON object per line, append-only logical model (file rewritten on edits). Per-entry shape:
@@ -88,6 +101,7 @@ Scope is read from the `mirror` block of `~/Documents/cockpit/todoist-structure.
   "project": "bin|todo|...",
   "origin": null | "todoist",
   "mirrored_at": null | "ISO-8601",
+  "notion_inbox_id": null | "<Capture Inbox page id>",
   "sync": {
     "logseq": null | {"file": "...", "marker": "...", "ts": "..."},
     "todoist": null | {"task_id": "...", "url": "...", "ts": "...", "project_id": "...", "closed_ts": null | "ISO-8601"}

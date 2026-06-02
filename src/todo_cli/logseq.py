@@ -133,11 +133,24 @@ def append_journal_dedup(block: str, marker: str) -> bool:
     return True
 
 
+def sync_candidates(entries: list[TodoEntry]) -> list[TodoEntry]:
+    """Open local-origin rows eligible for Logseq task blocks.
+
+    Todoist-origin rows are a read-only backlog mirror. They stay out of the
+    journal unless a future command deliberately promotes one into local work.
+    """
+    return [
+        e
+        for e in entries
+        if e.status == "open" and e.sync.logseq is None and e.origin != "todoist"
+    ]
+
+
 def sync(entries: list[TodoEntry]) -> int:
     journal = journal_path()
     journal.parent.mkdir(parents=True, exist_ok=True)
     existing = journal.read_text() if journal.exists() else ""
-    pending = [e for e in entries if e.status == "open" and e.sync.logseq is None]
+    pending = sync_candidates(entries)
     appended = 0
     new_blocks: list[str] = []
     for e in pending:
