@@ -433,6 +433,10 @@ def cmd_telegram_poll(args: argparse.Namespace) -> int:
     if not TELEGRAM_ENABLED:
         print("telegram: disabled (TODO_TELEGRAM=0)")
         return 0
+    if args.loop:
+        # poll_loop idles until a token appears, so the daemon can be loaded
+        # before the BotFather token is stored (it activates with no reload).
+        return telegram.poll_loop()
     if not telegram.token():
         print(
             "telegram: no token — store one:\n"
@@ -440,8 +444,6 @@ def cmd_telegram_poll(args: argparse.Namespace) -> int:
             "'<BOTFATHER_TOKEN>'"
         )
         return 1
-    if args.loop:
-        return telegram.poll_loop()
     n = telegram.poll_once()
     print(f"telegram: filed {n} capture(s) into the vault")
     return 0
