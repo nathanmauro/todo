@@ -1,6 +1,8 @@
 # todo
 
-Local-first todo capture CLI. Store in `~/.todo/todos.jsonl`. Push to Logseq journal + Todoist. Completion is bidirectional — finish a task anywhere and it converges everywhere: `done` here closes it there; `pull`/`reconcile` bring remote completions back here.
+Local-first capture CLI. Tasks live in `~/.todo/todos.jsonl` and push to **Todoist**; notes/captures land in the **Obsidian vault** (the canonical store) as one Markdown file each. Task completion is bidirectional — finish a task anywhere and it converges everywhere: `done` here closes it there; `pull`/`reconcile` bring remote completions back here.
+
+> **Logseq is a frozen archive** (2026-06-01). The Logseq task-sync writers are kept but gated **off** behind `TODO_LOGSEQ_SYNC=1`; by default the CLI never writes to the Logseq graph. The mobile front door is the Telegram bot → Obsidian (`todo telegram-poll --loop`).
 
 ## Install
 
@@ -13,14 +15,19 @@ Edits to `src/todo_cli/cli.py` apply immediately via the `todo` shim in `~/.loca
 ## Commands
 
 ```
-todo add "text" [--due YYYY-MM-DD] [--source ...] [--project ...]
+todo add "text" [--due YYYY-MM-DD] [--source ...] [--project ...] [--no-sync]
 todo ls   [--all|--open|--done]
-todo done <id-prefix>          # closes it in Todoist + flips its Logseq line to DONE
+todo done <id-prefix>          # closes it in Todoist (+ flips its Logseq line to DONE only if TODO_LOGSEQ_SYNC=1)
 todo rm   <id-prefix>
 todo edit
+todo note "text"               # capture a note into the Obsidian vault (captures/YYYY-MM-DD/)
 todo sync       [--target all|logseq|todoist]
+todo refresh    [--dry-run]
+todo audit
 todo reconcile  [--target all|logseq|todoist]
 todo pull       [--dry-run]
+todo telegram-poll [--loop]     # poll the capture bot; file each message into the vault
+todo telegram-send "text"       # message the last chat that messaged the bot
 todo doctor
 ```
 
@@ -29,9 +36,12 @@ todo doctor
 Env overrides:
 
 - `TODO_DIR` — store dir (default `~/.todo`)
-- `TODO_LOGSEQ_GRAPH` — Logseq graph root (default `~/Notes`)
-- `TODO_TODOIST_PROJECT_ID` — Todoist project to create tasks in (default: Inbox, resolved from `~/Documents/cockpit/todoist-structure.json`)
+- `TODO_OBSIDIAN_VAULT` — Obsidian vault root for captures (default `~/Notes/obsidian`)
+- `TODO_LOGSEQ_SYNC` — set to `1` to re-enable the (frozen) Logseq task-sync writers; off by default
+- `TODO_LOGSEQ_GRAPH` — Logseq graph root (default `~/Notes/logseq`); only used when `TODO_LOGSEQ_SYNC=1`
+- `TODO_TODOIST_PROJECT_ID` — Todoist project to create tasks in (default: Inbox, resolved from `~/Developer/proj/cockpit/todoist-structure.json`)
 - `TODOIST_TOKEN` — overrides Keychain lookup
+- `TODO_TELEGRAM_STATE` / `TODO_TELEGRAM_CHAT` — Telegram offset cursor + last-chat file (default under `~/.todo/`)
 
 Todoist token in Keychain:
 
@@ -60,19 +70,34 @@ Use: `⌘Space` → `todo` → `↵` → type text → `↵`.
 
 A `sync.todoist.closed_ts` stamp gates the outbound push so a completion is pushed exactly once and rows flipped done *by* a remote (via `reconcile`/`pull`) are never echoed back out. The two directions converge to the same state and never oscillate.
 
-## Logseq
+## Obsidian capture
 
-Appends `- TODO <text> <!-- todo:<id> --></text>` block to today's journal `<graph>/journals/YYYY_MM_DD.md`. `reconcile` flips local to done when the block starts with `- DONE` / `- CANCELED` / `- [x]`; conversely, completing a task locally rewrites its `- TODO` / `- DOING` / `- [ ]` block to `- DONE` / `- [x]` (idempotent, matched by marker).
+`todo note "..."` (and every Telegram capture) writes one Markdown file under `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md` with frontmatter (`id, created, source, type, status, tags`). One file per capture keeps a Google-Drive-synced vault conflict-free. The Obsidian vault is the canonical note/idea store.
+
+## Logseq (frozen archive)
+
+Logseq became a read-only archive on 2026-06-01. The task-sync writers still exist — appending `- TODO <text> <!-- todo:<id> -->` to today's journal and flipping it to `- DONE`/`- [x]` on completion — but they are **no-ops unless `TODO_LOGSEQ_SYNC=1`**. Re-enable only for a one-off backfill; the CLI does not touch the graph in normal operation.
 
 ## Todoist
 
-Creates a task via Todoist API v1. Tasks land in the default capture project (Inbox, resolved from `~/Documents/cockpit/todoist-structure.json`, overridable with `TODO_TODOIST_PROJECT_ID`). `--source` and `--project` are attached as **labels** — not sections — and a missing project label is auto-created on first use. `reconcile` flips local to done when the remote task is completed or deleted (404); completing a task locally closes it remotely (a 404 counts as already-closed). `todo sync` both creates new open tasks and flushes pending completions.
+Creates a task via Todoist API v1. Tasks land in the default capture project (Inbox, resolved from `~/Developer/proj/cockpit/todoist-structure.json`, overridable with `TODO_TODOIST_PROJECT_ID`). `--source` and `--project` are attached as **labels** — not sections — and a missing project label is auto-created on first use. `reconcile` flips local to done when the remote task is completed or deleted (404); completing a task locally closes it remotely (a 404 counts as already-closed). `todo sync` both creates new open tasks and flushes pending completions.
 
 ## Mirror (`todo pull`)
 
 `pull` makes Todoist the source of truth and the local store a read-only mirror. It lists in-scope Todoist tasks and upserts them into `todos.jsonl` keyed on `sync.todoist.task_id`: tasks created here (CLI/agents) update in place, and tasks created elsewhere (phone, web, MCP) are imported as `origin: "todoist"` rows. Imported rows are never pushed back (echo-loop guard), and a mirrored task that disappears from Todoist's active set is flipped to done.
 
-Scope is read from the `mirror` block of `~/Documents/cockpit/todoist-structure.json` (default: every personal project, drop shared/workspace projects like Team Inbox, active tasks only). `--dry-run` reports what would change without writing.
+Scope is read from the `mirror` block of `~/Developer/proj/cockpit/todoist-structure.json` (default: every personal project, drop shared/workspace projects like Team Inbox, active tasks only). `--dry-run` reports what would change without writing.
+
+## Refresh / Audit
+
+`refresh` is the on-demand convergence command: it pulls the Todoist mirror,
+reconciles remote completion status, writes inbound state, then pushes eligible
+local-origin task completions out to Todoist (and, only when `TODO_LOGSEQ_SYNC=1`,
+to the Logseq journal). Mirrored Todoist backlog rows are deliberately skipped by
+Logseq sync so the journal only gets curated local/agent task references.
+
+`audit` summarizes the local store counts and the expected gap between the
+Todoist backlog mirror and curated Logseq task refs.
 
 ## Storage
 
@@ -88,6 +113,7 @@ Scope is read from the `mirror` block of `~/Documents/cockpit/todoist-structure.
   "project": "bin|todo|...",
   "origin": null | "todoist",
   "mirrored_at": null | "ISO-8601",
+  "notion_inbox_id": null,   // dormant: only present on legacy rows from the retired Notion drain (2026-06-01)
   "sync": {
     "logseq": null | {"file": "...", "marker": "...", "ts": "..."},
     "todoist": null | {"task_id": "...", "url": "...", "ts": "...", "project_id": "...", "closed_ts": null | "ISO-8601"}

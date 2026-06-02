@@ -10,7 +10,18 @@ TODO_DIR = Path(os.environ.get("TODO_DIR", HOME / ".todo"))
 TODOS_FILE = TODO_DIR / "todos.jsonl"
 LOG_FILE = TODO_DIR / "todo.log"
 
-LOGSEQ_GRAPH = Path(os.environ.get("TODO_LOGSEQ_GRAPH", HOME / "Notes"))
+_LOGSEQ_GRAPH_RAW = Path(os.environ.get("TODO_LOGSEQ_GRAPH", HOME / "Notes" / "logseq")).expanduser()
+if _LOGSEQ_GRAPH_RAW == HOME / "Notes":
+    _LOGSEQ_GRAPH_RAW = HOME / "Notes" / "logseq"
+LOGSEQ_GRAPH = _LOGSEQ_GRAPH_RAW
+
+# Obsidian vault — the canonical capture/memory store (plan-transition.md,
+# 2026-06-01). Phone (Telegram) and CLI captures each land as one Markdown file
+# under <vault>/captures/YYYY-MM-DD/. Override the path here when the vault moves
+# onto Google Drive for cross-device read/write — a single env flip, no code change.
+OBSIDIAN_VAULT = Path(
+    os.environ.get("TODO_OBSIDIAN_VAULT", HOME / "Notes" / "obsidian")
+)
 
 # Todoist API v1
 TODOIST_API = "https://api.todoist.com/api/v1"
@@ -26,7 +37,7 @@ def _structure() -> dict:
     struct = Path(
         os.environ.get(
             "TODOIST_STRUCTURE",
-            HOME / "Documents" / "cockpit" / "todoist-structure.json",
+            HOME / "Developer" / "proj" / "cockpit" / "todoist-structure.json",
         )
     )
     try:
@@ -74,63 +85,45 @@ TODOIST_PROJECT_ID = _default_project_id()
 
 KEYCHAIN_SERVICE = "todo-cli"
 
-# --- Notion Capture Inbox (mobile -> Logseq journal pull) -------------------
-# A row in this Notion database is a phone-captured note/idea/task. The
-# `notion-sync` verb pulls unsynced rows DOWN into today's Logseq journal
-# (append-only) and flips Synced=true. Notion is never the source of truth for
-# notes once pulled — Logseq owns them. Tasks route through the normal todo
-# store so they reach Todoist like any other task.
-NOTION_API = "https://api.notion.com/v1"
-NOTION_VERSION = "2022-06-28"
-NOTION_KEYCHAIN_ACCOUNT = os.environ.get("TODO_NOTION_KEYCHAIN_ACCOUNT", "notion")
-# Capture Inbox database id (under Notion: Journal -> Capture Inbox).
-NOTION_INBOX_DB = os.environ.get(
-    "TODO_NOTION_INBOX_DB", "2e7f85cb-883b-406b-a47a-666b3bfbf79f"
-)
-NOTION_SYNC_DIR = Path(os.environ.get("TODO_NOTION_SYNC_DIR", HOME / ".notion-sync"))
-NOTION_SYNC_STATE = NOTION_SYNC_DIR / "state.json"
+# --- Logseq task sync (frozen archive; OFF by default) ----------------------
+# Logseq (~/Notes/logseq) became a FROZEN read-only archive on 2026-06-01. The
+# CLI no longer writes task blocks/journal lines there unless this flag is
+# explicitly turned on (TODO_LOGSEQ_SYNC=1) — every Logseq write is otherwise a
+# no-op. Kept behind a flag (rather than ripped out) so the writers can be
+# re-enabled for a one-off backfill without resurrecting code.
+LOGSEQ_SYNC_ENABLED = os.environ.get("TODO_LOGSEQ_SYNC", "0") == "1"
 
-# --- PARA auto-filing ledger ------------------------------------------------
-# Maps each pulled Capture Inbox row (page_id) to where it was filed, so a
-# re-run after a classifier returned a *different* target page can't double
-# file. LLM placement is non-deterministic; the in-file `<!-- nx:<id> -->`
-# marker only guards the one target it happened to choose, so the ledger is the
-# authoritative "already handled" record. See `ledger.py`.
-FILED_LEDGER = NOTION_SYNC_DIR / "filed.json"
-
-# Quarantine page for low-confidence placements: filed here for human triage in
-# Logseq rather than guessed into a topic page (the graph is hand-curated).
-INBOX_CAPTURE_PAGE = os.environ.get("TODO_INBOX_CAPTURE_PAGE", "inbox-capture")
-
-# --- Local PARA classifier (LM Studio, OpenAI-compatible) -------------------
-# A capture is classified by a small local model first (qwen3-4b MLX via LM
-# Studio, the same model sba-agentic uses). On unreachable/parse failure/low
-# confidence the capture falls back to the journal (never dropped, never
-# guessed). Optional escalation to `claude -p` is OFF by default to keep the
-# 15-min launchd job keyless and offline-tolerant.
-CLASSIFY_ENABLED = os.environ.get("TODO_CLASSIFY", "1") != "0"
-CLASSIFY_ENDPOINT = os.environ.get(
-    "TODO_CLASSIFY_ENDPOINT", "http://localhost:1234/v1/chat/completions"
-)
-CLASSIFY_MODEL = os.environ.get(
-    "TODO_CLASSIFY_MODEL", "qwen3-4b-instruct-2507-mlx"
-)
-# Route to a topic page only at/above this confidence; below the lower bound a
-# clear non-journal capture is quarantined to INBOX_CAPTURE_PAGE.
-CLASSIFY_PAGE_THRESHOLD = float(os.environ.get("TODO_CLASSIFY_PAGE_THRESHOLD", "0.7"))
-CLASSIFY_QUARANTINE_FLOOR = float(os.environ.get("TODO_CLASSIFY_QUARANTINE_FLOOR", "0.4"))
-# `claude -p` second opinion for borderline cases (off by default).
-CLASSIFY_ESCALATE = os.environ.get("TODO_CLASSIFY_ESCALATE", "0") == "1"
-
-# --- Telegram capture lane --------------------------------------------------
-# A @BotFather bot is an additional capture *producer*: getUpdates long-poll
-# (no public endpoint, works behind NAT), voice notes transcribed locally, then
-# one create_row into the Capture Inbox so the existing drain files it. Token
-# from the login keychain (account 'telegram', service 'todo-cli').
+# --- Telegram -> Obsidian capture lane --------------------------------------
+# A @BotFather bot is the mobile front door. `todo telegram-poll --loop` runs a
+# getUpdates long-poll daemon (no public endpoint, works behind NAT); each
+# message becomes one Markdown file in the Obsidian vault under
+# captures/YYYY-MM-DD/ (see obsidian.py). "+t" tasks also push to Todoist. Voice
+# notes are transcribed locally with whisper.cpp. Token from the login keychain
+# (account 'telegram', service 'todo-cli'). The last update_id is persisted as
+# the exactly-once offset cursor; the sender chat_id is persisted so the bot can
+# proactively message back (see TELEGRAM_CHAT below).
 TELEGRAM_API = "https://api.telegram.org"
 TELEGRAM_KEYCHAIN_ACCOUNT = os.environ.get("TODO_TELEGRAM_KEYCHAIN_ACCOUNT", "telegram")
-TELEGRAM_STATE = NOTION_SYNC_DIR / "telegram-state.json"
+# Exactly-once offset cursor. Lives under the neutral store dir (was under
+# ~/.notion-sync/ before the 2026-06-01 cutover; the live offset was migrated
+# across when the Notion lane was retired).
+TELEGRAM_STATE = Path(
+    os.environ.get("TODO_TELEGRAM_STATE", TODO_DIR / "telegram-state.json")
+)
+# Last sender chat_id, persisted so `todo telegram-send` can message Nathan back
+# (delivery enabler — the bot becomes a two-way channel, not just an inbox).
+TELEGRAM_CHAT = Path(
+    os.environ.get("TODO_TELEGRAM_CHAT", TODO_DIR / "telegram-chat.json")
+)
 TELEGRAM_ENABLED = os.environ.get("TODO_TELEGRAM", "1") != "0"
+# Single-user lock: comma-separated numeric chat ids allowed to drive the bot.
+# Empty = accept any chat (and the bot's reply tells you your chat_id so you can
+# lock it). A non-empty list silently drops messages from any other chat.
+TELEGRAM_ALLOWED_CHATS = [
+    c.strip()
+    for c in os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "").split(",")
+    if c.strip()
+]
 # whisper.cpp CLI for voice-note transcription (brew install whisper-cpp).
 WHISPER_BIN = os.environ.get("TODO_WHISPER_BIN", "whisper-cli")
 # ggml model path; "" disables voice transcription (text captures still work).

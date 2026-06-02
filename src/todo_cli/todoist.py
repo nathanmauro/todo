@@ -133,6 +133,29 @@ def complete_task(tok: str, task_id: str) -> None:
     urllib.request.urlopen(req, timeout=15)
 
 
+def create_candidates(entries: list[TodoEntry]) -> list[TodoEntry]:
+    """Open local-origin rows eligible to be created in Todoist."""
+    return [
+        e
+        for e in entries
+        if e.status == "open"
+        and e.sync.todoist is None
+        and e.origin != "todoist"
+    ]
+
+
+def completion_candidates(entries: list[TodoEntry]) -> list[TodoEntry]:
+    """Done rows with a remote task that still need a close pushed."""
+    return [
+        e
+        for e in entries
+        if e.status == "done"
+        and e.sync.todoist is not None
+        and e.sync.todoist.task_id
+        and not e.sync.todoist.closed_ts
+    ]
+
+
 def sync(entries: list[TodoEntry]) -> int:
     tok = token()
     if not tok:
@@ -145,16 +168,7 @@ def sync(entries: list[TodoEntry]) -> int:
     # Never re-push a row that was mirrored in from Todoist. (Imported rows
     # already carry a task_id, so `sync.todoist is None` excludes them too;
     # the origin check is explicit defense against an echo loop.)
-    pending = [
-        e
-        for e in entries
-        if e.status == "open"
-        and e.sync.todoist is None
-        and e.origin != "todoist"
-    ]
-    if not pending:
-        print("todoist: nothing to sync")
-        return 0
+    pending = create_candidates(entries)
 
     ensured: set[str] = set()
     created = 0
@@ -207,6 +221,10 @@ def sync(entries: list[TodoEntry]) -> int:
     # Todoist (offline `done`s, failed inline pushes). This is what makes
     # `todo sync` the catch-up for "done here -> done there".
     closed, close_failed = push_completions(entries, tok)
+
+    if created == 0 and closed == 0 and failed == 0 and close_failed == 0:
+        print("todoist: nothing to sync")
+        return 0
 
     print(f"todoist: created {created}, closed {closed}, failed {failed}")
     log(

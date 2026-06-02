@@ -1,5 +1,13 @@
 # Android quick-capture → Notion Capture Inbox
 
+> **⚠️ SUPERSEDED 2026-06-01 → Telegram → Obsidian.**
+> This flow (Android HTTP Shortcut → Notion Capture Inbox → Logseq drain) is
+> **retired**. Notion is now read-only reference and Logseq is a frozen archive;
+> the `notion-sync` drain, the PARA classifier, and the Notion producer were
+> removed from the `todo` CLI. The live mobile front door is the **Telegram bot
+> → Obsidian vault** — see [`telegram-capture.md`](telegram-capture.md). This
+> file is kept only as historical reference for the old Notion REST recipe.
+
 One-tap capture from an Android phone into the Notion **Capture Inbox** database.
 The `logseq-notion-sync` launchd agent on `in8-mac` then drains new rows every 15
 minutes and **PARA-classifies** each note (local qwen3-4b via LM Studio): a

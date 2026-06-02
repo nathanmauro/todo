@@ -1,7 +1,7 @@
 [project]
 name = "todo-cli"
 version = "0.1.0"
-description = "Local-first todo capture with Logseq + Todoist sync"
+description = "Local-first capture CLI: Obsidian vault notes + Todoist task sync"
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.6",
