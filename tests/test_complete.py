@@ -11,9 +11,22 @@ import io
 import urllib.error
 from unittest.mock import MagicMock
 
+import pytest
+
 from todo_cli import commands, logseq, todoist
 from todo_cli.models import LogseqSync, TodoEntry, TodoistSync
 from todo_cli.storage import load_all, write_all
+
+
+@pytest.fixture(autouse=True)
+def _enable_logseq_sync(monkeypatch):
+    """Pin the Logseq completion *mechanics* (the one-off-backfill path).
+
+    Logseq sync is frozen OFF in production (2026-06-01), but the line-flip /
+    cmd_done outbound leg must still work when a backfill flips TODO_LOGSEQ_SYNC
+    on — that behavior is what this module guards, so enable it for every test.
+    """
+    monkeypatch.setattr(logseq, "LOGSEQ_SYNC_ENABLED", True)
 
 
 # --- Todoist: push_completions ----------------------------------------------

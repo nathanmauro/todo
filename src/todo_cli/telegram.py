@@ -1,15 +1,18 @@
-"""Telegram capture lane — a producer into the Notion Capture Inbox.
+"""Telegram -> Obsidian capture lane (the live mobile front door, 2026-06-01).
 
 A @BotFather bot is polled with getUpdates (long-poll offset cursor, no public
-endpoint, works behind NAT). Each inbound message becomes one Capture Inbox row
-so the existing 15-min drain files it into Logseq — Telegram is NOT a second
-writer to the graph. Voice notes are downloaded (OGG/Opus, <=20 MB) and
-transcribed locally with whisper.cpp when configured. The bot replies
-"filed ✓" to close the loop. The last update_id is the exactly-once cursor.
+endpoint, works behind NAT). Each inbound message becomes ONE Markdown file in
+the Obsidian vault under captures/YYYY-MM-DD/ (see obsidian.py) — the Obsidian
+vault is the canonical store; there is no Notion/Logseq writer in this path.
+"+t"/"+task" captures also push a single task to Todoist. Voice notes are
+downloaded (OGG/Opus, <=20 MB) and transcribed locally with whisper.cpp when
+configured. The bot replies "filed ✓" to close the loop, and persists the
+sender chat_id so it can proactively message back (`todo telegram-send`). The
+last update_id is the exactly-once offset cursor.
 
 Token: login keychain (account 'telegram', service 'todo-cli') or
 TELEGRAM_BOT_TOKEN. Only ONE process may poll a token at once (Telegram returns
-409 otherwise) — fine here, the single launchd job owns it.
+409 otherwise) — fine here, the single launchd daemon owns it.
 """
 from __future__ import annotations
 
@@ -22,11 +25,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from . import notion, obsidian, todoist
+from . import obsidian, todoist
 from .config import (
     KEYCHAIN_SERVICE,
     TELEGRAM_ALLOWED_CHATS,
     TELEGRAM_API,
+    TELEGRAM_CHAT,
     TELEGRAM_KEYCHAIN_ACCOUNT,
     TELEGRAM_STATE,
     WHISPER_BIN,
@@ -139,47 +143,55 @@ def message_text(msg: dict, tok: str) -> str | None:
     return None
 
 
-def pull_into_inbox(notion_tok: str) -> int:
-    """Poll new Telegram messages and create a Capture Inbox row for each.
+def _chat_state() -> dict:
+    try:
+        return json.loads(TELEGRAM_CHAT.read_text())
+    except Exception:
+        return {}
 
-    Best-effort: returns the number of rows created; logs and returns 0 on any
-    transport error so it never blocks the Notion drain. Advances the offset
-    cursor only past messages it has handled.
+
+def _save_chat_id(chat_id) -> None:
+    """Persist the most recent sender chat_id so the bot can message back.
+
+    Best-effort: a write failure must never break the capture path. The last
+    writer wins — captures come from one chat in practice, and `telegram-send`
+    only needs *a* reachable chat.
+    """
+    if chat_id is None:
+        return
+    try:
+        TELEGRAM_CHAT.parent.mkdir(parents=True, exist_ok=True)
+        TELEGRAM_CHAT.write_text(json.dumps({"chat_id": chat_id}, indent=2))
+    except OSError as exc:
+        log(f"telegram: could not persist chat_id: {exc}")
+
+
+def last_chat_id() -> int | str | None:
+    """The most recently seen sender chat_id, or None if none has been stored."""
+    return _chat_state().get("chat_id")
+
+
+def send(text: str) -> bool:
+    """Send `text` to the last-persisted chat via the bot. Returns success.
+
+    Delivery enabler: turns the capture bot into a two-way channel so other
+    tooling (or Nathan, via `todo telegram-send`) can push a notification to the
+    phone. No-op (returns False) when there is no token or no known chat.
     """
     tok = token()
     if not tok:
-        return 0
-    offset = int(_state().get("offset", 0))
-    params = {"timeout": 0, "allowed_updates": json.dumps(["message"])}
-    if offset:
-        params["offset"] = offset + 1
-    resp = _api(tok, "getUpdates", params)
-    if not resp or not resp.get("ok"):
-        return 0
-    created = 0
-    last_id = offset
-    for upd in resp.get("result", []):
-        last_id = upd["update_id"]
-        msg = upd.get("message") or {}
-        chat_id = (msg.get("chat") or {}).get("id")
-        text = message_text(msg, tok)
-        if text:
-            pid = notion.create_row(notion_tok, text, source="telegram")
-            if pid:
-                created += 1
-                if chat_id is not None:
-                    _api(tok, "sendMessage",
-                         {"chat_id": chat_id, "text": "filed ✓"})
-        _save_offset(last_id)  # advance past every handled update
-    if created:
-        log(f"telegram pulled {created} capture(s) into Notion inbox")
-    return created
+        log("telegram send: no token")
+        return False
+    chat_id = last_chat_id()
+    if chat_id is None:
+        log("telegram send: no chat_id yet (message the bot once first)")
+        return False
+    resp = _api(tok, "sendMessage", {"chat_id": chat_id, "text": text})
+    return bool(resp and resp.get("ok"))
 
 
 # --- Obsidian-canonical capture lane (live path, 2026-06-01) ----------------
 # A message becomes one Markdown file in the vault; tasks also push to Todoist.
-# `pull_into_inbox` above is the legacy Notion producer — kept for reference but
-# no longer scheduled (Notion is read-only reference now).
 
 _PREFIXES = {"+t": "task", "+task": "task", "+i": "idea", "+idea": "idea"}
 
@@ -287,6 +299,11 @@ def poll_once(long_poll: bool = False) -> int:
             if locked and str(chat_id) not in TELEGRAM_ALLOWED_CHATS:
                 log(f"telegram: dropped msg from unauthorized chat {chat_id}")
                 continue
+            # Remember who we're talking to so the bot can message back later
+            # (`todo telegram-send`). Done for every authorized message, even one
+            # with no capturable text (e.g. a "/start"), so the channel opens on
+            # first contact.
+            _save_chat_id(chat_id)
             text = message_text(msg, tok)
             if not text:
                 continue

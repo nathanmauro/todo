@@ -85,3 +85,67 @@ def test_route_note_does_not_push(vault, monkeypatch):
     kind, path = telegram._route("plain note")
     assert kind == "note"
     assert path.exists()
+
+
+# --- chat_id persistence + send-to-last-chat (delivery enabler) --------------
+
+@pytest.fixture
+def chat_file(tmp_path, monkeypatch):
+    """Isolate the persisted chat_id file so the test never touches ~/.todo."""
+    p = tmp_path / "telegram-chat.json"
+    monkeypatch.setattr(telegram, "TELEGRAM_CHAT", p)
+    return p
+
+
+def test_chat_id_persists_and_reads_back(chat_file):
+    assert telegram.last_chat_id() is None
+    telegram._save_chat_id(424242)
+    assert chat_file.exists()
+    assert telegram.last_chat_id() == 424242
+    # last writer wins
+    telegram._save_chat_id(999)
+    assert telegram.last_chat_id() == 999
+
+
+def test_save_chat_id_ignores_none(chat_file):
+    telegram._save_chat_id(None)
+    assert not chat_file.exists()
+    assert telegram.last_chat_id() is None
+
+
+def test_send_uses_last_chat(chat_file, monkeypatch):
+    sent = {}
+
+    def fake_api(tok, method, params, timeout=35.0):
+        sent["tok"] = tok
+        sent["method"] = method
+        sent["params"] = params
+        return {"ok": True, "result": {"message_id": 1}}
+
+    monkeypatch.setattr(telegram, "token", lambda: "TESTTOK")
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    telegram._save_chat_id(555)
+
+    assert telegram.send("ping from the bot") is True
+    assert sent["method"] == "sendMessage"
+    assert sent["params"]["chat_id"] == 555
+    assert sent["params"]["text"] == "ping from the bot"
+
+
+def test_send_no_chat_is_noop(chat_file, monkeypatch):
+    monkeypatch.setattr(telegram, "token", lambda: "TESTTOK")
+    monkeypatch.setattr(
+        telegram, "_api",
+        lambda *a, **k: pytest.fail("must not call the API with no chat_id"),
+    )
+    assert telegram.send("nobody to send to") is False
+
+
+def test_send_no_token_is_noop(chat_file, monkeypatch):
+    telegram._save_chat_id(7)
+    monkeypatch.setattr(telegram, "token", lambda: None)
+    monkeypatch.setattr(
+        telegram, "_api",
+        lambda *a, **k: pytest.fail("must not call the API with no token"),
+    )
+    assert telegram.send("no token") is False

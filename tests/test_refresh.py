@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from todo_cli import commands, logseq, notion, todoist
+from todo_cli import commands, logseq, todoist
 from todo_cli.models import LogseqSync, TodoEntry, TodoistSync
 from todo_cli.storage import load_all, write_all
 
@@ -15,6 +15,9 @@ def test_logseq_sync_skips_todoist_origin_rows(tmp_path, monkeypatch):
     graph = tmp_path / "graph"
     (graph / "journals").mkdir(parents=True)
     monkeypatch.setattr(logseq, "LOGSEQ_GRAPH", graph)
+    # Logseq sync is frozen by default; this test pins the *enabled* behavior
+    # (the mirror-origin exclusion that a one-off backfill must still honor).
+    monkeypatch.setattr(logseq, "LOGSEQ_SYNC_ENABLED", True)
 
     local = TodoEntry(text="local task", source="cli")
     mirrored = TodoEntry(text="remote backlog", source="todoist", origin="todoist")
@@ -113,7 +116,9 @@ def test_audit_counts(capsys):
     mirrored = TodoEntry(text="remote", origin="todoist", source="todoist")
     mirrored.sync.todoist = TodoistSync(task_id="T1", ts="x")
     done = TodoEntry(text="done", status="done", source="cli")
-    linked = TodoEntry(text="notion task", source="mobile", notion_inbox_id="N1")
+    # A legacy row that still carries the dormant notion_inbox_id field must
+    # still parse and be counted normally (no special-cased audit line anymore).
+    linked = TodoEntry(text="legacy mobile task", source="mobile", notion_inbox_id="N1")
     linked.sync.logseq = LogseqSync(file="j.md", marker="m", ts="x")
 
     write_all([local_missing, mirrored, done, linked])
@@ -127,29 +132,13 @@ def test_audit_counts(capsys):
     assert "open_local_missing_todoist: 2" in out
     assert "open_local_missing_logseq: 1" in out
     assert "open_mirrored_missing_logseq_expected: 1" in out
-    assert "notion_inbox_linked: 1" in out
-
-
-def test_notion_sync_empty_inbox_triggers_refresh(monkeypatch):
-    calls = []
-    monkeypatch.setattr(commands, "TELEGRAM_ENABLED", False)
-    monkeypatch.setattr(notion, "token", lambda: "tok")
-    monkeypatch.setattr(notion, "query_unsynced", lambda tok: [])
-    monkeypatch.setattr(notion, "write_state", lambda *args: None)
-    monkeypatch.setattr(
-        commands,
-        "_refresh_task_state",
-        lambda entries, dry_run=False, quiet=False: calls.append((dry_run, quiet)) or 0,
-    )
-
-    assert commands.cmd_notion_sync(
-        argparse.Namespace(dry_run=False, pull_only=False)
-    ) == 0
-    assert calls == [(False, True)]
+    assert "notion_inbox_linked" not in out
 
 
 def test_session_hook_uses_refresh():
-    hook = Path("/Users/nathan/Documents/cockpit/scripts/cockpit-todoist-session-hook")
+    hook = Path(
+        "/Users/nathan/Developer/proj/cockpit/scripts/cockpit-todoist-session-hook"
+    )
     if not hook.exists():
         pytest.skip("cockpit hook is outside this checkout")
     body = hook.read_text()

@@ -68,6 +68,8 @@ class TodoEntry(BaseModel):
     # originated. The push channel never re-pushes a "todoist" row.
     origin: str | None = None
     mirrored_at: str | None = None
+    # Dormant: kept only so old todos.jsonl rows (written by the retired Notion
+    # Capture Inbox drain, 2026-06-01) still parse. Nothing reads or sets it now.
     notion_inbox_id: str | None = None
 
     @property

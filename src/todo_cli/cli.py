@@ -1,6 +1,8 @@
-"""todo — local-first capture CLI with Logseq + Todoist sync.
+"""todo — local-first capture CLI with Obsidian + Todoist sync.
 
-Storage: ~/.todo/todos.jsonl (append-only JSON Lines).
+Storage: ~/.todo/todos.jsonl (append-only JSON Lines). Notes/captures land in the
+Obsidian vault (the canonical store); tasks push to Todoist. Logseq is a frozen
+archive — its task-sync writers are gated off behind TODO_LOGSEQ_SYNC.
 """
 from __future__ import annotations
 
@@ -14,13 +16,13 @@ from .commands import (
     cmd_edit,
     cmd_ls,
     cmd_note,
-    cmd_notion_sync,
     cmd_pull,
     cmd_refresh,
     cmd_reconcile,
     cmd_rm,
     cmd_sync,
     cmd_telegram_poll,
+    cmd_telegram_send,
 )
 
 
@@ -36,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument(
         "--no-sync",
         action="store_true",
-        help="only write the local JSONL row; defer Logseq/Todoist sync",
+        help="only write the local JSONL row; defer Todoist sync",
     )
     a.set_defaults(func=cmd_add)
 
@@ -57,7 +59,10 @@ def build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("edit", help="open todos.jsonl in $EDITOR")
     e.set_defaults(func=cmd_edit)
 
-    s = sub.add_parser("sync", help="push to Logseq and/or Todoist")
+    s = sub.add_parser(
+        "sync",
+        help="push pending tasks to Todoist (logseq target is frozen unless TODO_LOGSEQ_SYNC=1)",
+    )
     s.add_argument(
         "--target", choices=["all", "logseq", "todoist"], default="all"
     )
@@ -76,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     refresh = sub.add_parser(
         "refresh",
-        help="converge Todoist, local store, and curated Logseq task blocks",
+        help="converge Todoist and the local store (Logseq sync frozen by default)",
     )
     refresh.add_argument(
         "--dry-run",
@@ -95,26 +100,10 @@ def build_parser() -> argparse.ArgumentParser:
     rc.set_defaults(func=cmd_reconcile)
 
     nt = sub.add_parser(
-        "note", help="append a free-form note to today's Logseq journal"
+        "note", help="capture a free-form note into the Obsidian vault"
     )
     nt.add_argument("text", nargs="+")
     nt.set_defaults(func=cmd_note)
-
-    ns = sub.add_parser(
-        "notion-sync",
-        help="pull mobile captures from the Notion Capture Inbox into today's journal",
-    )
-    ns.add_argument(
-        "--pull-only",
-        action="store_true",
-        help="don't push pulled tasks to Todoist (journal only)",
-    )
-    ns.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="show classifier placement for each capture without writing or marking",
-    )
-    ns.set_defaults(func=cmd_notion_sync)
 
     tg = sub.add_parser(
         "telegram-poll",
@@ -126,6 +115,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="run the long-poll daemon (launchd KeepAlive); default is one pass",
     )
     tg.set_defaults(func=cmd_telegram_poll)
+
+    ts = sub.add_parser(
+        "telegram-send",
+        help="send a message to the last chat that messaged the capture bot",
+    )
+    ts.add_argument("text", nargs="+")
+    ts.set_defaults(func=cmd_telegram_send)
 
     audit = sub.add_parser("audit", help="summarize local sync state")
     audit.set_defaults(func=cmd_audit)

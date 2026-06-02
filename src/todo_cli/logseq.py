@@ -1,11 +1,19 @@
-"""Logseq journal sync + reconcile."""
+"""Logseq journal sync + reconcile (FROZEN archive; gated OFF by default).
+
+Logseq (~/Notes/logseq) became a read-only archive on 2026-06-01 — the Obsidian
+vault is now the canonical store. Every writer/reader here is gated behind
+`config.LOGSEQ_SYNC_ENABLED` (env `TODO_LOGSEQ_SYNC=1`) and is a NO-OP unless it
+is explicitly turned on, so `todo add/done/sync/refresh` no longer touch the
+frozen graph. The code is kept (not deleted) so a one-off backfill can re-enable
+it by flipping the flag.
+"""
 from __future__ import annotations
 
 import datetime as dt
 import re
 from pathlib import Path
 
-from .config import LOGSEQ_GRAPH
+from .config import LOGSEQ_GRAPH, LOGSEQ_SYNC_ENABLED
 from .models import LogseqSync, TodoEntry, now_iso
 from .storage import log
 
@@ -105,8 +113,11 @@ def note(text: str, src_id: str) -> int:
     """Append a free-form `- <text>` note to today's journal (local-only).
 
     `src_id` is the entry/capture id used to build a grep-able idempotency
-    marker so re-runs never duplicate the block.
+    marker so re-runs never duplicate the block. No-op while Logseq sync is
+    frozen (`TODO_LOGSEQ_SYNC` unset); `cmd_note` now writes an Obsidian capture.
     """
+    if not LOGSEQ_SYNC_ENABLED:
+        return 0
     text = text.strip()
     if not text:
         return 0
@@ -124,7 +135,10 @@ def append_journal_dedup(block: str, marker: str) -> bool:
     """Append a pre-formatted block to today's journal unless `marker` is present.
 
     Returns True if appended, False if the marker already existed (idempotent).
+    No-op (returns False) while Logseq sync is frozen (`TODO_LOGSEQ_SYNC` unset).
     """
+    if not LOGSEQ_SYNC_ENABLED:
+        return False
     journal = journal_path()
     existing = journal.read_text() if journal.exists() else ""
     if marker and marker in existing:
@@ -147,6 +161,8 @@ def sync_candidates(entries: list[TodoEntry]) -> list[TodoEntry]:
 
 
 def sync(entries: list[TodoEntry]) -> int:
+    if not LOGSEQ_SYNC_ENABLED:
+        return 0
     journal = journal_path()
     journal.parent.mkdir(parents=True, exist_ok=True)
     existing = journal.read_text() if journal.exists() else ""
@@ -184,7 +200,10 @@ def complete(entries: list[TodoEntry]) -> int:
     (matching `reconcile`'s per-entry view), not per line. Reads/writes with
     `newline=""` so untouched CRLF/mixed line endings survive verbatim.
     Returns the number of entries flipped. Silent: callers own the summary.
+    No-op (returns 0) while Logseq sync is frozen (`TODO_LOGSEQ_SYNC` unset).
     """
+    if not LOGSEQ_SYNC_ENABLED:
+        return 0
     flipped = 0
     by_file: dict[str, list[TodoEntry]] = {}
     for e in entries:
@@ -230,8 +249,11 @@ def complete(entries: list[TodoEntry]) -> int:
 def reconcile(entries: list[TodoEntry]) -> int:
     """Scan synced journal lines; if marker line begins with DONE, mark local done.
 
-    Also detects Logseq's checkbox `- [x]` form.
+    Also detects Logseq's checkbox `- [x]` form. No-op (returns 0) while Logseq
+    sync is frozen (`TODO_LOGSEQ_SYNC` unset).
     """
+    if not LOGSEQ_SYNC_ENABLED:
+        return 0
     checked = 0
     flipped = 0
     missing = 0

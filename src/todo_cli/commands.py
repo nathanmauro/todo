@@ -8,11 +8,10 @@ import os
 import subprocess
 import sys
 
-from . import classify, ledger, logseq, notion, telegram, todoist
+from . import logseq, obsidian, telegram, todoist
 from .config import (
-    CLASSIFY_ENABLED,
-    INBOX_CAPTURE_PAGE,
     LOGSEQ_GRAPH,
+    LOGSEQ_SYNC_ENABLED,
     TELEGRAM_ENABLED,
     TODOIST_PROJECT_ID,
     TODO_DIR,
@@ -20,7 +19,7 @@ from .config import (
     mirror_policy,
 )
 from .formatting import human_ago, sync_badges
-from .models import TodoEntry, new_id, now_iso
+from .models import TodoEntry, now_iso
 from .storage import (
     append,
     ensure_store,
@@ -92,9 +91,6 @@ def _audit_counts(entries: list[TodoEntry]) -> dict[str, int]:
         ),
         "open_mirrored_missing_logseq_expected": len(
             [e for e in mirrored_open if e.sync.logseq is None]
-        ),
-        "notion_inbox_linked": len(
-            [e for e in entries if e.notion_inbox_id is not None]
         ),
     }
 
@@ -243,185 +239,41 @@ def cmd_audit(args: argparse.Namespace) -> int:
         "  open_mirrored_missing_logseq_expected: "
         f"{counts['open_mirrored_missing_logseq_expected']}"
     )
-    print(f"  notion_inbox_linked: {counts['notion_inbox_linked']}")
     return 0
 
 
 def cmd_note(args: argparse.Namespace) -> int:
-    """Append a free-form note to today's Logseq journal (local-only)."""
+    """Capture a free-form note into the Obsidian vault (canonical store).
+
+    Writes one Markdown file under <vault>/captures/YYYY-MM-DD/ — the same lane
+    the Telegram bot uses — instead of the (now frozen) Logseq journal.
+    """
     text = " ".join(args.text).strip()
     if not text:
         sys.exit("empty note")
-    src_id = new_id()[-8:]
-    if logseq.note(text, src_id):
-        print(f"note → today's journal  ({src_id})  {text}")
-    else:
-        print("note: nothing appended (empty or already present)")
+    path = obsidian.write_capture(text, kind="note", source="cli")
+    print(f"note → {path}")
     return 0
 
 
-_INBOX_PROPS = (
-    "para:: resource\n"
-    "area:: [[area/agent-logs]]\n"
-    "summary:: low-confidence mobile captures awaiting manual triage"
-)
+def cmd_telegram_send(args: argparse.Namespace) -> int:
+    """Send a message to the last chat that messaged the capture bot.
 
-
-def _file_capture(row, pages: dict[str, str], dry_run: bool) -> str:
-    """Decide + write one note/idea capture; return a one-line description.
-
-    Idea rows keep the existing `#idea` journal flow. Plain notes are routed by
-    the PARA classifier: a confident match goes to that topic page, a borderline
-    match is quarantined to the inbox-capture page, everything else lands in the
-    journal. Every block carries the `nx` marker and is recorded in the ledger so
-    re-runs never double-file even if the classifier later picks a different page.
+    Lets the bot push a notification back to Nathan's phone (delivery enabler).
+    Requires that a message has been received at least once (so a chat_id is on
+    file) and that the BotFather token is stored.
     """
-    mk = notion.nx_marker(row.page_id)
-
-    if row.idea:
-        block = f"- #idea {row.text} {mk}"
-        if not dry_run:
-            logseq.append_journal_dedup(block, mk)
-            ledger.record(row.page_id, "journal", source=row.source)
-        return "journal (#idea)"
-
-    if CLASSIFY_ENABLED and pages:
-        dec = classify.classify(row.text, pages)
-    else:
-        dec = classify.Decision("journal", via="disabled")
-
-    links = " ".join(f"[[{name}]]" for name in dec.links)
-    block = f"- {row.text}{(' ' + links) if links else ''} {mk}"
-
-    if dec.action == "page" and dec.target_file:
-        if not dry_run:
-            logseq.append_to_page(dec.target_file, block, marker=mk)
-            ledger.record(row.page_id, dec.target_file,
-                          confidence=dec.confidence, source=row.source)
-        return f"page [[{dec.page_name}]] (conf {dec.confidence:.2f} via {dec.via})"
-
-    if dec.action == "inbox":
-        fn = logseq.file_for_page(INBOX_CAPTURE_PAGE)
-        if not dry_run:
-            logseq.append_to_page(fn, block, marker=mk, create_props=_INBOX_PROPS)
-            ledger.record(row.page_id, fn,
-                          confidence=dec.confidence, source=row.source)
-        return f"inbox-capture (conf {dec.confidence:.2f}, needs triage)"
-
-    if not dry_run:
-        logseq.append_journal_dedup(block, mk)
-        ledger.record(row.page_id, "journal",
-                      confidence=dec.confidence, source=row.source)
-    return f"journal (conf {dec.confidence:.2f} via {dec.via})"
-
-
-def cmd_notion_sync(args: argparse.Namespace) -> int:
-    """Pull mobile captures (Notion Capture Inbox + Telegram) into the Logseq graph.
-
-    Telegram messages are first turned into Capture Inbox rows (producer lane), so
-    the single drain below handles everything. Plain notes are PARA-classified and
-    filed to the best topic page (or quarantined / journaled); idea rows keep the
-    `#idea` journal flow; task-flagged rows become TodoEntry rows that reach
-    Todoist + the journal via the existing sync path. Each processed row is flipped
-    to Synced=true. `--dry-run` reports placement without writing or marking.
-    """
-    tok = notion.token()
-    if not tok:
-        print(
-            "notion: no token — set NOTION_TOKEN or add keychain account "
-            f"'{notion.NOTION_KEYCHAIN_ACCOUNT}' under service "
-            f"'{notion.KEYCHAIN_SERVICE}'"
-        )
-        return 1
-
-    # Telegram lane: turn new messages into Capture Inbox rows first, so the
-    # single drain below files them too. Best-effort — never blocks the drain.
-    tg = 0
-    if TELEGRAM_ENABLED and not args.dry_run:
-        try:
-            tg = telegram.pull_into_inbox(tok)
-        except Exception as exc:  # noqa: BLE001 — lane must not break the drain
-            log(f"telegram lane error: {exc}")
-
-    rows = notion.query_unsynced(tok)
-    if rows is None:
-        print(
-            f"notion: could not reach Capture Inbox (db {notion.NOTION_INBOX_DB}) "
-            "— is the 'local-todo' integration connected to it? "
-            "See ~/Developer/proj/todo/docs/android-capture.md"
-        )
-        return 1
-    if not rows:
-        print("notion: nothing to pull")
-        rc = 0
-        if not args.dry_run:
-            notion.write_state(0, 0, 0)
-            if not args.pull_only:
-                rc = _refresh_task_state(load_all(), quiet=True)
-        return rc
-
-    entries = load_all()
-    seen_inbox = {getattr(e, "notion_inbox_id", None) for e in entries}
-    pages = logseq.page_index() if CLASSIFY_ENABLED else {}
-
-    to_mark: list[str] = []
-    notes_filed = 0
-    tasks_created = 0
-
-    for row in rows:
-        if ledger.has(row.page_id):
-            # Already filed on a prior run; just (re)ensure it gets marked.
-            to_mark.append(row.page_id)
-            continue
-        if row.task:
-            # Route through the todo store -> Todoist + journal TODO line.
-            if row.page_id not in seen_inbox:
-                if not args.dry_run:
-                    entries.append(
-                        TodoEntry(
-                            text=row.text,
-                            source=row.source or "mobile",
-                            notion_inbox_id=row.page_id,
-                        )
-                    )
-                tasks_created += 1
-                if args.dry_run:
-                    print(f"  task  {row.text!r} -> Todoist + journal")
-            to_mark.append(row.page_id)
-            continue
-        desc = _file_capture(row, pages, args.dry_run)
-        notes_filed += 1
-        if args.dry_run:
-            print(f"  note  {row.text!r} -> {desc}")
-        to_mark.append(row.page_id)
-
-    if args.dry_run:
-        print(
-            f"notion: DRY RUN — {notes_filed} note(s), {tasks_created} task(s) "
-            f"across {len(rows)} row(s); nothing written or marked"
-        )
+    text = " ".join(args.text).strip()
+    if not text:
+        sys.exit("empty message")
+    if telegram.send(text):
+        print(f"telegram: sent to chat {telegram.last_chat_id()}")
         return 0
-
-    if tasks_created:
-        write_all(entries)
-
-    marked = sum(1 for pid in to_mark if notion.mark_synced(tok, pid))
-    notion.write_state(notes_filed, tasks_created, len(rows))
-    refresh_rc = 0
-    if args.pull_only:
-        # Preserve the explicit pull-only contract: task rows get journal refs,
-        # but no Todoist creates/closes are pushed by this command.
-        entries = load_all()
-        _run_quiet(logseq.sync, entries, quiet=True)
-        write_all(entries)
-    else:
-        refresh_rc = _refresh_task_state(load_all(), quiet=True)
     print(
-        f"notion: pulled {notes_filed} note(s), {tasks_created} task(s)"
-        f"{f' (+{tg} via Telegram)' if tg else ''}; "
-        f"marked {marked}/{len(to_mark)} synced"
+        "telegram: not sent — need a stored token AND a known chat_id "
+        "(message the bot once so it records your chat)"
     )
-    return refresh_rc
+    return 1
 
 
 def cmd_telegram_poll(args: argparse.Namespace) -> int:
@@ -456,18 +308,28 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         f"todos file: {TODOS_FILE}  "
         f"{'OK' if TODOS_FILE.exists() else 'MISSING'}"
     )
-    ls_dir = LOGSEQ_GRAPH / "journals"
-    print(f"logseq journals: {ls_dir}  {'OK' if ls_dir.exists() else 'MISSING'}")
-    if not ls_dir.exists():
+    vault = obsidian.captures_root()
+    print(
+        f"obsidian captures: {vault}  "
+        f"{'OK' if vault.parent.exists() else 'MISSING (vault root absent)'}"
+    )
+    if not vault.parent.exists():
         ok = False
+    # Logseq is a frozen archive (2026-06-01) — writes are gated off by default.
+    print(
+        f"logseq sync: {'ENABLED (TODO_LOGSEQ_SYNC=1)' if LOGSEQ_SYNC_ENABLED else 'FROZEN (off; archive)'}"
+        f"  graph={LOGSEQ_GRAPH}"
+    )
     tok = todoist.token()
     print(f"todoist token: {'OK (keychain or env)' if tok else 'MISSING'}")
     if not tok:
         ok = False
     print(f"todoist project: {TODOIST_PROJECT_ID}")
-    ntok = notion.token()
-    print(f"notion token: {'OK (keychain or env)' if ntok else 'MISSING'}")
-    print(f"notion inbox db: {notion.NOTION_INBOX_DB}")
+    ttok = telegram.token()
+    print(f"telegram token: {'OK (keychain or env)' if ttok else 'MISSING (bot idle)'}")
+    print(
+        f"telegram chat: {telegram.last_chat_id() or 'none yet (message the bot once)'}"
+    )
     pol = mirror_policy()
     print(
         f"mirror policy: exclude_shared={pol['exclude_shared']} "
