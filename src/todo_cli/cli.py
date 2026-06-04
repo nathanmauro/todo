@@ -11,11 +11,13 @@ import argparse
 from .commands import (
     cmd_add,
     cmd_audit,
+    cmd_backlog,
     cmd_doctor,
     cmd_done,
     cmd_edit,
     cmd_ls,
     cmd_note,
+    cmd_plan,
     cmd_pull,
     cmd_refresh,
     cmd_reconcile,
@@ -47,6 +49,55 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--done", dest="filter", action="store_const", const="done")
     ls.add_argument("--open", dest="filter", action="store_const", const="open")
     ls.set_defaults(filter="open", func=cmd_ls)
+
+    bk = sub.add_parser(
+        "backlog",
+        help="show this project's backlog / planned / in-flight (cwd-derived)",
+    )
+    bk.add_argument(
+        "name",
+        nargs="?",
+        help="project label (default: current directory name)",
+    )
+    bk.add_argument(
+        "--if-project",
+        action="store_true",
+        help="silent no-op unless cwd is a known project label "
+        "(near-free guard for a global SessionStart hook; implies --offline)",
+    )
+    bk.add_argument(
+        "--offline",
+        action="store_true",
+        help="use the local Todoist mirror only — no network call",
+    )
+    bk.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="emit stable JSON groups for agents and hooks",
+    )
+    bk.add_argument(
+        "--history",
+        action="store_true",
+        help="include executed/done plan history in terminal output",
+    )
+    bk.set_defaults(func=cmd_backlog)
+
+    pl = sub.add_parser(
+        "plan",
+        help="shape an idea or create/execute/status an execution plan",
+        description="Shape an idea or manage execution-plan records.",
+        epilog=(
+            "Examples:\n"
+            "  todo plan idea-slug --project cockpit\n"
+            "  todo plan create --id plan-slug --title \"Plan\" --project cockpit --summary \"one-line\"\n"
+            "  todo plan execute plan-slug --summary \"what shipped\"\n"
+            "  todo plan status plan-slug"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pl.add_argument("plan_args", nargs=argparse.REMAINDER, metavar="{<idea>|create|execute|status}")
+    pl.set_defaults(func=cmd_plan)
 
     d = sub.add_parser("done", help="mark a todo done")
     d.add_argument("id_prefix")

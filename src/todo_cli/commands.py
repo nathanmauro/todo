@@ -7,8 +7,9 @@ import io
 import os
 import subprocess
 import sys
+from pathlib import Path
 
-from . import logseq, obsidian, telegram, todoist
+from . import backlog, logseq, obsidian, plan, telegram, todoist
 from .config import (
     LOGSEQ_GRAPH,
     LOGSEQ_SYNC_ENABLED,
@@ -142,6 +143,111 @@ def cmd_ls(args: argparse.Namespace) -> int:
             line += f"  {badges}"
         print(line)
     return 0
+
+
+def cmd_backlog(args: argparse.Namespace) -> int:
+    """Per-project pull: backlog / planned / in-flight across Obsidian + Todoist.
+
+    Defaults the project to the current directory name, so running it inside
+    ~/Developer/proj/<name> just works. `--if-project` is the near-free guard
+    for a global SessionStart hook (silent unless cwd is a known project label).
+    """
+    name = (args.name or Path.cwd().name).strip()
+    return backlog.run(
+        name,
+        if_project=getattr(args, "if_project", False),
+        offline=getattr(args, "offline", False),
+        json_output=getattr(args, "json_output", False),
+        history=getattr(args, "history", False),
+    )
+
+
+def _parse_tags(values: list[str]) -> list[str]:
+    tags: list[str] = []
+    for value in values:
+        for part in value.split(","):
+            tag = part.strip()
+            if tag and tag not in tags:
+                tags.append(tag)
+    return tags
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    """Handle the plan gate plus execution-plan records.
+
+    Legacy shape remains `todo plan <idea> --project <project>`. New execution
+    plan records live under `todo plan create|execute|status`.
+    """
+    argv = list(getattr(args, "plan_args", []))
+    if not argv:
+        print("todo plan: expected an idea query or create|execute|status", file=sys.stderr)
+        return 2
+
+    command = argv[0]
+    if command in {"create", "execute", "status"}:
+        parser = argparse.ArgumentParser(prog=f"todo plan {command}")
+        if command == "create":
+            parser.add_argument("--id", required=True)
+            parser.add_argument("--title", required=True)
+            parser.add_argument("--summary", required=True)
+            parser.add_argument("--project", required=True)
+            parser.add_argument("--priority", choices=["high", "med", "low"], default="med")
+            parser.add_argument("--source", default="codex")
+            parser.add_argument("--created")
+            parser.add_argument("--tag", action="append", default=[])
+            parser.add_argument("--google-drive-url", default="pending")
+            parser.add_argument("--drive-query")
+            parser.add_argument("--plan-file")
+            parser.add_argument("--force", action="store_true")
+            parsed = parser.parse_args(argv[1:])
+            return plan.create_execution_plan(
+                plan_id=parsed.id,
+                title=parsed.title,
+                summary=parsed.summary,
+                project=parsed.project,
+                priority=parsed.priority,
+                source=parsed.source,
+                created=parsed.created,
+                tags=_parse_tags(parsed.tag),
+                google_drive_url=parsed.google_drive_url,
+                drive_query=parsed.drive_query,
+                plan_file=parsed.plan_file,
+                force=parsed.force,
+            )
+        if command == "execute":
+            parser.add_argument("id")
+            parser.add_argument("--summary", required=True)
+            parser.add_argument("--executed-at")
+            parser.add_argument("--google-drive-url")
+            parsed = parser.parse_args(argv[1:])
+            return plan.execute_plan(
+                parsed.id,
+                summary=parsed.summary,
+                executed_at=parsed.executed_at,
+                google_drive_url=parsed.google_drive_url,
+            )
+        parser.add_argument("id")
+        parsed = parser.parse_args(argv[1:])
+        return plan.execution_plan_status(parsed.id)
+
+    parser = argparse.ArgumentParser(prog="todo plan")
+    parser.add_argument("query", nargs="+", help="idea slug or title substring")
+    parser.add_argument(
+        "--project",
+        required=True,
+        help="project label this plan belongs to (the home it graduates into)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="preview the change without writing the file",
+    )
+    parsed = parser.parse_args(argv)
+    return plan.shape(
+        " ".join(parsed.query),
+        parsed.project,
+        dry_run=getattr(parsed, "dry_run", False),
+    )
 
 
 def cmd_done(args: argparse.Namespace) -> int:

@@ -21,6 +21,11 @@ todo done <id-prefix>          # closes it in Todoist (+ flips its Logseq line t
 todo rm   <id-prefix>
 todo edit
 todo note "text"               # capture a note into the Obsidian vault (captures/YYYY-MM-DD/)
+todo plan <idea> --project <project>
+todo plan create --id <slug> --title "title" --project <project> --summary "one-line" [--plan-file plan.md]
+todo plan execute <slug> --summary "what shipped"
+todo plan status <slug>
+todo backlog [project] [--offline] [--json] [--history]
 todo sync       [--target all|logseq|todoist]
 todo refresh    [--dry-run]
 todo audit
@@ -73,6 +78,19 @@ A `sync.todoist.closed_ts` stamp gates the outbound push so a completion is push
 ## Obsidian capture
 
 `todo note "..."` (and every Telegram capture) writes one Markdown file under `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md` with frontmatter (`id, created, source, type, status, tags`). One file per capture keeps a Google-Drive-synced vault conflict-free. The Obsidian vault is the canonical note/idea store.
+
+## Plan / Backlog
+
+`todo backlog <project>` is the single project work view. It reads Obsidian plus
+Todoist and groups work as In flight, Planned, and Backlog / Ideas. The command
+is read-only; `--json` emits stable groups for agent hooks, and `--history`
+shows executed plan records that are hidden by default.
+
+`todo plan <idea> --project <project>` graduates an idea note in
+`05 Notes/ideas/` by stamping `project:` and `status: shaped`. `todo plan
+create` writes standalone execution plans into `06 Backlog/` with `type: plan`
+and `status: shaped`; `todo plan execute` marks them `done` with execution
+metadata. Cockpit's `scripts/cockpit-plan` delegates here.
 
 ## Logseq (frozen archive)
 

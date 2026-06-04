@@ -81,6 +81,24 @@ def taxonomy_labels() -> dict:
     }
 
 
+def project_role_ids() -> dict[str, str]:
+    """Structure project-key -> Todoist project id (inbox, current_work,
+    idea_cooker, resource, archive). Empty if the structure file is absent.
+    Lets `todo backlog` classify a task's lane without hard-coding ids."""
+    out: dict[str, str] = {}
+    for key, val in _structure().get("projects", {}).items():
+        if isinstance(val, dict) and val.get("id"):
+            out[key] = val["id"]
+    return out
+
+
+def idea_cooker_sections() -> dict[str, str]:
+    """Idea Cooker section name -> section id (dreamer, cooking, shaped,
+    board_ready, parked). Empty if absent."""
+    ic = _structure().get("projects", {}).get("idea_cooker", {})
+    return dict(ic.get("sections", {}))
+
+
 TODOIST_PROJECT_ID = _default_project_id()
 
 KEYCHAIN_SERVICE = "todo-cli"
