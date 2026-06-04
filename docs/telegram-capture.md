@@ -1,12 +1,19 @@
 # Telegram quick-capture → Obsidian vault
 
 A @BotFather bot is the **mobile front door** for capture (2026-06-01 cutover).
-You message the bot — text or a held-to-record voice note — and the
+You message the bot — text, voice, files, media, locations, or other Telegram
+message payloads — and the
 `com.nathan.telegram-capture` launchd daemon (`todo telegram-poll --loop`) files
 each message as **one Markdown file in the Obsidian vault** under
 `captures/YYYY-MM-DD/<HHMMSS>-telegram-<id8>.md`. The Obsidian vault is the
 canonical store; there is no Notion or Logseq writer in this path anymore (Notion
 is read-only reference, Logseq is a frozen archive).
+
+File-bearing messages are saved best-effort under
+`Attachments/telegram/YYYY-MM-DD/` and linked from the capture note. If Telegram
+will not return the bytes (for example because the Bot API refuses the file),
+the capture still lands with the file metadata and the download error instead
+of disappearing.
 
 Prefixes route the capture:
 
@@ -57,10 +64,12 @@ behind NAT. Official Bot API, zero ban risk.
 
 1. `getUpdates` long-poll from the stored offset cursor
    (`~/.todo/telegram-state.json`) — exactly-once.
-2. For each authorized message: extract text (voice notes are downloaded ≤20 MB
-   and transcribed), classify by prefix, write one capture file; tasks also push
-   a single Todoist task. Persist the sender `chat_id`, reply `filed ✓`, and
-   advance the offset cursor past the handled update.
+2. For each authorized message: extract text when present (voice/audio may be
+   transcribed), download every Telegram `file_id` payload best-effort, classify
+   by prefix when text exists, and write one capture file. Messages without text
+   still write a structured metadata note; tasks also push a single Todoist
+   task. Persist the sender `chat_id`, reply `filed ✓`, and advance the offset
+   cursor past the handled update.
 
 Test one pass without the loop: `todo telegram-poll` (also the easiest way to
 grab your `chat_id` from the reply). Send a message back to yourself with

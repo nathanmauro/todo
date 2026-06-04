@@ -77,7 +77,7 @@ A `sync.todoist.closed_ts` stamp gates the outbound push so a completion is push
 
 ## Obsidian capture
 
-`todo note "..."` (and every Telegram capture) writes one Markdown file under `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md` with frontmatter (`id, created, source, type, status, tags`). One file per capture keeps a Google-Drive-synced vault conflict-free. The Obsidian vault is the canonical note/idea store.
+`todo note "..."` (and every Telegram capture) writes one Markdown file under `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md` with frontmatter (`id, created, source, type, status, tags`). Telegram file/media payloads are saved best-effort under `<vault>/Attachments/telegram/YYYY-MM-DD/`; if a download fails, the capture still records the metadata and error. One file per capture keeps a Google-Drive-synced vault conflict-free. The Obsidian vault is the canonical note/idea store.
 
 ## Plan / Backlog
 

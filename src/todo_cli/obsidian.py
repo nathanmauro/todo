@@ -14,7 +14,9 @@ notes and ideas are plain body text.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import secrets
+from typing import Any
 from pathlib import Path
 
 from .config import OBSIDIAN_VAULT
@@ -28,9 +30,25 @@ def captures_root() -> Path:
     return OBSIDIAN_VAULT / "captures"
 
 
+def attachments_root() -> Path:
+    """Attachments dir under the (possibly monkeypatched) vault root."""
+    return OBSIDIAN_VAULT / "Attachments"
+
+
+def _yaml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, int | float):
+        return str(value)
+    return json.dumps(value, ensure_ascii=False)
+
+
 def _frontmatter(id8: str, created: str, source: str, kind: str,
-                 status: str, tags: list[str]) -> str:
-    return (
+                 status: str, tags: list[str],
+                 metadata: dict[str, Any] | None = None) -> str:
+    body = (
         "---\n"
         f"id: {id8}\n"
         f"created: {created}\n"
@@ -38,13 +56,17 @@ def _frontmatter(id8: str, created: str, source: str, kind: str,
         f"type: {kind}\n"
         f"status: {status}\n"
         f"tags: [{', '.join(tags)}]\n"
-        "---\n"
     )
+    for key, value in (metadata or {}).items():
+        body += f"{key}: {_yaml_value(value)}\n"
+    return body + "---\n"
 
 
 def write_capture(text: str, kind: str = "note", source: str = "telegram", *,
                   id8: str | None = None, created: str | None = None,
-                  tags: list[str] | None = None) -> Path:
+                  tags: list[str] | None = None,
+                  metadata: dict[str, Any] | None = None,
+                  extra_body: str | None = None) -> Path:
     """Write one capture as its own Markdown file; return the path.
 
     `kind` is one of note|idea|task. Tasks become a Markdown checkbox so they
@@ -64,8 +86,12 @@ def write_capture(text: str, kind: str = "note", source: str = "telegram", *,
     path = folder / f"{now.strftime('%H%M%S')}-{source}-{id8}.md"
 
     body = f"- [ ] {text}" if kind == "task" else text
+    if extra_body:
+        body = body.rstrip() + "\n\n" + extra_body.strip()
     path.write_text(
-        _frontmatter(id8, created, source, kind, "open", tags) + "\n" + body + "\n"
+        _frontmatter(
+            id8, created, source, kind, "open", tags, metadata=metadata
+        ) + "\n" + body + "\n"
     )
     log(f"obsidian capture {kind} -> {path}")
     return path

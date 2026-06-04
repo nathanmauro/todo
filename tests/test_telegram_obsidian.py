@@ -87,6 +87,123 @@ def test_route_note_does_not_push(vault, monkeypatch):
     assert path.exists()
 
 
+# --- media-safe Telegram capture --------------------------------------------
+
+class _FakeResponse:
+    def __init__(self, data: bytes):
+        self.data = data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return self.data
+
+
+@pytest.fixture
+def telegram_poll_env(vault, tmp_path, monkeypatch):
+    monkeypatch.setattr(telegram, "TELEGRAM_STATE", tmp_path / "telegram-state.json")
+    monkeypatch.setattr(telegram, "TELEGRAM_CHAT", tmp_path / "telegram-chat.json")
+    monkeypatch.setattr(telegram, "TELEGRAM_ALLOWED_CHATS", ["123"])
+    monkeypatch.setattr(telegram, "token", lambda: "TESTTOK")
+    monkeypatch.setattr(telegram, "_push_task", lambda *a, **k: None)
+    return tmp_path
+
+
+def test_poll_once_files_document_without_caption(
+    telegram_poll_env, vault, monkeypatch
+):
+    def fake_api(tok, method, params, timeout=35.0):
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [{
+                    "update_id": 10,
+                    "message": {
+                        "message_id": 77,
+                        "date": 1780500000,
+                        "chat": {"id": 123, "type": "private"},
+                        "document": {
+                            "file_id": "doc-file",
+                            "file_unique_id": "doc-unique",
+                            "file_name": "report.pdf",
+                            "mime_type": "application/pdf",
+                            "file_size": 7,
+                        },
+                    },
+                }],
+            }
+        if method == "getFile":
+            assert params["file_id"] == "doc-file"
+            return {
+                "ok": True,
+                "result": {
+                    "file_id": "doc-file",
+                    "file_unique_id": "doc-unique",
+                    "file_path": "documents/report.pdf",
+                    "file_size": 7,
+                },
+            }
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": 78}}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    monkeypatch.setattr(
+        telegram.urllib.request,
+        "urlopen",
+        lambda url, timeout=60: _FakeResponse(b"PDFDATA"),
+    )
+
+    assert telegram.poll_once() == 1
+    captures = list((obsidian.captures_root()).glob("*/*.md"))
+    assert len(captures) == 1
+    body = captures[0].read_text()
+    assert "Telegram document received" in body
+    assert "report.pdf" in body
+    assert "application/pdf" in body
+
+    attachments = list((vault / "Attachments" / "telegram").glob("*/*"))
+    assert len(attachments) == 1
+    assert attachments[0].name.endswith(".pdf")
+    assert attachments[0].read_bytes() == b"PDFDATA"
+
+
+def test_poll_once_records_structured_message_without_media(
+    telegram_poll_env, monkeypatch
+):
+    def fake_api(tok, method, params, timeout=35.0):
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [{
+                    "update_id": 11,
+                    "message": {
+                        "message_id": 79,
+                        "date": 1780500010,
+                        "chat": {"id": 123, "type": "private"},
+                        "location": {"latitude": 40.44, "longitude": -79.99},
+                    },
+                }],
+            }
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": 80}}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(telegram, "_api", fake_api)
+
+    assert telegram.poll_once() == 1
+    captures = list((obsidian.captures_root()).glob("*/*.md"))
+    assert len(captures) == 1
+    body = captures[0].read_text()
+    assert "Telegram location received" in body
+    assert '"latitude": 40.44' in body
+    assert '"longitude": -79.99' in body
+
+
 # --- chat_id persistence + send-to-last-chat (delivery enabler) --------------
 
 @pytest.fixture
