@@ -7,6 +7,9 @@ archive — its task-sync writers are gated off behind TODO_LOGSEQ_SYNC.
 from __future__ import annotations
 
 import argparse
+import sys
+
+from .storage import LockTimeout
 
 from .commands import (
     cmd_add,
@@ -186,7 +189,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
-    return args.func(args)
+    try:
+        return args.func(args)
+    except LockTimeout as exc:
+        print(f"todo: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

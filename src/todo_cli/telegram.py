@@ -41,7 +41,7 @@ from .config import (
     WHISPER_MODEL,
 )
 from .models import TodoEntry, TodoistSync, now_iso
-from .storage import load_all, log, write_all
+from .storage import file_lock, load_all, log, write_all
 
 
 def token() -> str | None:
@@ -422,15 +422,26 @@ def _push_task(text: str, source: str = "telegram") -> bool:
             tok, text, project_id=todoist.TODOIST_PROJECT_ID, labels=[source]
         )
         tid = str(task.get("id", ""))
-        entries = load_all()
-        entry = TodoEntry(text=text, source=source)
-        entry.sync.todoist = TodoistSync(
-            task_id=tid,
-            url=f"https://app.todoist.com/app/task/{tid}",
-            ts=now_iso(),
-        )
-        entries.append(entry)
-        write_all(entries)
+        # Lock the read-modify-rewrite so an in-flight `todo refresh` (which
+        # holds the lock across its network window) can't clobber this row.
+        with file_lock():
+            entries = load_all()
+            if any(
+                e.sync.todoist and e.sync.todoist.task_id == tid
+                for e in entries
+            ):
+                # A refresh that held the lock while we waited already
+                # mirrored the task we just created — that row is the record;
+                # appending another would duplicate it forever.
+                return True
+            entry = TodoEntry(text=text, source=source)
+            entry.sync.todoist = TodoistSync(
+                task_id=tid,
+                url=f"https://app.todoist.com/app/task/{tid}",
+                ts=now_iso(),
+            )
+            entries.append(entry)
+            write_all(entries)
         return True
     except Exception as exc:  # noqa: BLE001 — a capture must survive a bad push
         log(f"telegram task -> todoist failed: {exc}")

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nathan.todo-refresh</string>
+
+    <!-- Keep the local store (~/.todo/todos.jsonl) converged with Todoist:
+         `todo refresh` mirrors new/edited/completed Todoist tasks in and
+         pushes pending local creates/completions out. Replaces the retired
+         SessionStart hook (removed 2026-06-01) that used to trigger this.
+         Safe unattended: idempotent (closed_ts no-echo gate), flock-guarded
+         against the telegram daemon, returns 1 without raising when offline.
+         launchd runs one instance per label, so runs never overlap.
+         Install:
+           cp launchd/com.nathan.todo-refresh.plist ~/Library/LaunchAgents/
+           launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nathan.todo-refresh.plist -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/nathan/.local/bin/todo</string>
+        <string>refresh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/nathan</string>
+
+    <!-- 600 seconds = 10 minutes -->
+    <key>StartInterval</key>
+    <integer>600</integer>
+
+    <!-- Converge once right after login/load -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/nathan/Library/Logs/todo-refresh.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/nathan/Library/Logs/todo-refresh.log</string>
+
+    <!-- Todoist token comes from the login keychain (account todoist,
+         service todo-cli) — same item the CLI and telegram daemon read.
+         /usr/bin must stay on PATH for `security`. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

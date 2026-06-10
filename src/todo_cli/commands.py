@@ -24,6 +24,7 @@ from .models import TodoEntry, now_iso
 from .storage import (
     append,
     ensure_store,
+    file_lock,
     find_by_prefix,
     load_all,
     log,
@@ -53,9 +54,10 @@ def _refresh_task_state(
     if dry_run:
         scratch = [e.model_copy(deep=True) for e in entries]
         rc = 0
-        rc |= todoist.mirror(scratch, dry_run=True)
+        covered: set[str] = set()
+        rc |= todoist.mirror(scratch, dry_run=True, covered=covered)
         rc |= logseq.reconcile(scratch)
-        rc |= todoist.reconcile(scratch)
+        rc |= todoist.reconcile(scratch, skip_project_ids=covered)
         print(
             "refresh dry-run: would sync "
             f"{len(logseq.sync_candidates(scratch))} task(s) to Logseq, "
@@ -65,9 +67,16 @@ def _refresh_task_state(
         return rc
 
     rc = 0
-    rc |= _run_quiet(todoist.mirror, entries, quiet=quiet)
+    # `covered` = the project ids mirror's absence sweep actually judged;
+    # reconcile's per-task fetch then skips only mirrored rows in those
+    # projects. Out-of-scope mirrored rows (archived/shared/excluded project)
+    # and everything local-origin still get fetched.
+    covered: set[str] = set()
+    rc |= _run_quiet(todoist.mirror, entries, quiet=quiet, covered=covered)
     rc |= _run_quiet(logseq.reconcile, entries, quiet=quiet)
-    rc |= _run_quiet(todoist.reconcile, entries, quiet=quiet)
+    rc |= _run_quiet(
+        todoist.reconcile, entries, quiet=quiet, skip_project_ids=covered
+    )
     write_all(entries)
     rc |= _sync_outbound(entries, quiet=quiet)
     write_all(entries)
@@ -103,12 +112,14 @@ def cmd_add(args: argparse.Namespace) -> int:
     entry = TodoEntry(
         text=text, source=args.source, due=args.due, project=args.project
     )
-    append(entry)
+    with file_lock():
+        append(entry)
     if not getattr(args, "no_sync", False):
         try:
-            entries = load_all()
-            _sync_outbound(entries)
-            write_all(entries)
+            with file_lock():
+                entries = load_all()
+                _sync_outbound(entries)
+                write_all(entries)
         except Exception as exc:  # noqa: BLE001 - capture already persisted
             log(f"add sync best-effort failed id={entry.id}: {exc}")
     print(f"+ {entry.short_id}  {entry.text}")
@@ -139,6 +150,8 @@ def cmd_ls(args: argparse.Namespace) -> int:
             f"{e.short_id}  [{mark}]  {ago:>10}  "
             f"{proj:<{proj_w}}  {src:<{src_w}}  {e.text}"
         )
+        if e.due:
+            line += f"  [due {e.due}]"
         if badges:
             line += f"  {badges}"
         print(line)
@@ -251,22 +264,24 @@ def cmd_plan(args: argparse.Namespace) -> int:
 
 
 def cmd_done(args: argparse.Namespace) -> int:
-    entries = load_all()
-    target = find_by_prefix(entries, args.id_prefix)
-    if not target:
-        sys.exit(f"no todo matches '{args.id_prefix}'")
-    target.status = "done"
-    target.done_ts = now_iso()
-    target.done_source = target.done_source or "local"
-    # Persist the local completion before touching the network: a remote that
-    # is down or stalls must never cost us the local "done".
-    write_all(entries)
-    # Done here -> done there: propagate to Todoist + Logseq right away.
-    # Best-effort (push_completions swallows network errors); whatever doesn't
-    # land is flushed by the next `todo sync`. Re-persist to capture closed_ts.
-    closed, _ = todoist.push_completions([target])
-    ls_flipped = logseq.complete([target])
-    write_all(entries)
+    with file_lock():
+        entries = load_all()
+        target = find_by_prefix(entries, args.id_prefix)
+        if not target:
+            sys.exit(f"no todo matches '{args.id_prefix}'")
+        target.status = "done"
+        target.done_ts = now_iso()
+        target.done_source = target.done_source or "local"
+        # Persist the local completion before touching the network: a remote
+        # that is down or stalls must never cost us the local "done".
+        write_all(entries)
+        # Done here -> done there: propagate to Todoist + Logseq right away.
+        # Best-effort (push_completions swallows network errors); whatever
+        # doesn't land is flushed by the next `todo sync`. Re-persist to
+        # capture closed_ts.
+        closed, _ = todoist.push_completions([target])
+        ls_flipped = logseq.complete([target])
+        write_all(entries)
     where = [w for w, hit in (("todoist", closed), ("logseq", ls_flipped)) if hit]
     suffix = f"  → {', '.join(where)}" if where else ""
     print(f"done {target.short_id}  {target.text}{suffix}")
@@ -274,12 +289,13 @@ def cmd_done(args: argparse.Namespace) -> int:
 
 
 def cmd_rm(args: argparse.Namespace) -> int:
-    entries = load_all()
-    target = find_by_prefix(entries, args.id_prefix)
-    if not target:
-        sys.exit(f"no todo matches '{args.id_prefix}'")
-    entries = [e for e in entries if e.id != target.id]
-    write_all(entries)
+    with file_lock():
+        entries = load_all()
+        target = find_by_prefix(entries, args.id_prefix)
+        if not target:
+            sys.exit(f"no todo matches '{args.id_prefix}'")
+        entries = [e for e in entries if e.id != target.id]
+        write_all(entries)
     print(f"rm {target.short_id}  {target.text}")
     return 0
 
@@ -292,37 +308,44 @@ def cmd_edit(args: argparse.Namespace) -> int:
 
 
 def cmd_sync(args: argparse.Namespace) -> int:
-    entries = load_all()
-    rc = 0
-    if args.target in ("all", "logseq"):
-        rc |= logseq.sync(entries)
-    if args.target in ("all", "todoist"):
-        rc |= todoist.sync(entries)
-    write_all(entries)
+    with file_lock():
+        entries = load_all()
+        rc = 0
+        if args.target in ("all", "logseq"):
+            rc |= logseq.sync(entries)
+        if args.target in ("all", "todoist"):
+            rc |= todoist.sync(entries)
+        write_all(entries)
     return rc
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
-    entries = load_all()
-    rc = todoist.mirror(entries, dry_run=args.dry_run)
-    if not args.dry_run:
+    if args.dry_run:
+        return todoist.mirror(load_all(), dry_run=True)
+    with file_lock():
+        entries = load_all()
+        rc = todoist.mirror(entries)
         write_all(entries)
     return rc
 
 
 def cmd_refresh(args: argparse.Namespace) -> int:
-    entries = load_all()
-    return _refresh_task_state(entries, dry_run=args.dry_run)
+    if args.dry_run:
+        return _refresh_task_state(load_all(), dry_run=True)
+    with file_lock():
+        entries = load_all()
+        return _refresh_task_state(entries)
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
-    entries = load_all()
-    rc = 0
-    if args.target in ("all", "logseq"):
-        rc |= logseq.reconcile(entries)
-    if args.target in ("all", "todoist"):
-        rc |= todoist.reconcile(entries)
-    write_all(entries)
+    with file_lock():
+        entries = load_all()
+        rc = 0
+        if args.target in ("all", "logseq"):
+            rc |= logseq.reconcile(entries)
+        if args.target in ("all", "todoist"):
+            rc |= todoist.reconcile(entries)
+        write_all(entries)
     return rc
 
 

@@ -21,7 +21,7 @@ uv tool install --editable .        # editable install; the `todo` shim lands in
 Edits to `src/todo_cli/` apply immediately via the editable shim — no reinstall.
 
 ```sh
-.venv/bin/python -m pytest          # run the whole suite (70 tests, ~0.1s). -q for quiet.
+.venv/bin/python -m pytest          # run the whole suite (110 tests, ~0.3s). -q for quiet.
 .venv/bin/python -m pytest tests/test_complete.py::test_cmd_done_propagates_both_ways   # single test
 .venv/bin/python -m pytest tests/test_mirror.py                                          # single file
 .venv/bin/python -m pytest -k closed_ts                                                  # by substring
@@ -68,7 +68,7 @@ These are the load-bearing rules; the test suite pins them exactly.
 
 2. **Persist-before-network.** `cmd_done` calls `write_all()` to stamp `status=done` **before** any remote call, then `write_all()` again to record `closed_ts`. A down/stalled/offline remote can never cost the local "done" — completion errors swallow `OSError` (URLError/timeout/reset all subclass it), leave `closed_ts` unset for retry, and never re-raise (an escaping exception would abort the caller's `write_all`).
 
-3. **Inbound-before-outbound ordering.** `_refresh_task_state` (backing `todo refresh`) runs `todoist.mirror → logseq.reconcile → todoist.reconcile → write_all → _sync_outbound → write_all` — two `write_all` boundaries bracketing the outbound push, so remote completions land before anything is pushed. `tests/test_refresh.py` asserts this exact sequence; don't reorder it.
+3. **Inbound-before-outbound ordering.** `_refresh_task_state` (backing `todo refresh`) runs `todoist.mirror(covered=…) → logseq.reconcile → todoist.reconcile(skip_project_ids=covered) → write_all → _sync_outbound → write_all` — two `write_all` boundaries bracketing the outbound push, so remote completions land before anything is pushed. `tests/test_refresh.py` asserts this exact sequence; don't reorder it. `covered` is the set of project ids mirror's absence sweep actually judged: reconcile skips the per-task fetch ONLY for mirrored rows in those projects. Mirrored rows whose project left mirror scope (archived/shared/excluded — the sweep guard skips them) and all local-origin rows still get fetched, and a failed mirror leaves `covered` empty (full scan). Don't widen this skip back to "all `origin=='todoist'` rows" — that silently orphans out-of-scope mirrored completions forever (`test_reconcile_flips_out_of_scope_mirrored_completion` pins it).
 
 4. **Origin gate.** `create_candidates` and `logseq.sync_candidates` exclude `origin=="todoist"` rows — the mirrored Todoist backlog is read-only and is never re-pushed or materialized into the journal. This is redundant defense on top of the `task_id`/`closed_ts` checks.
 
@@ -97,8 +97,9 @@ One file per capture: `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md`, 
 ## Sharp edges
 
 - **`find_by_prefix` matches loosely**: full `id` OR `short_id` prefix OR *any substring of the full id* (a short numeric needle can collide across same-era timestamp prefixes). On >1 match it calls `sys.exit()` directly from the storage layer — callers can't catch it.
-- **`load_all` silently drops** any line that fails JSON/pydantic parse; the next `write_all` then rewrites the file *without* it (permanent loss, no warning). A crash mid-`append` can leave such a partial line.
-- **`append()` vs `write_all()` serialize differently**: `write_all` uses `exclude_none=True` (compact), `append` does not (emits nulls). Round-tripping a freshly-appended row changes its on-disk JSON. Only `write_all` is atomic (tmp-file + `os.replace`); there is no file locking anywhere (last writer wins).
+- **`load_all` quarantines** any line that fails JSON/pydantic parse into `~/.todo/todos.rejects.jsonl` (deduped, warning on stderr) — the next `write_all` still rewrites the file *without* it, but the raw line survives for manual recovery. A crash mid-`append` can leave such a partial line.
+- **`append()` vs `write_all()` serialize differently**: `write_all` uses `exclude_none=True` (compact), `append` does not (emits nulls). Round-tripping a freshly-appended row changes its on-disk JSON. Only `write_all` is atomic (tmp-file + `os.replace`).
+- **Cross-process locking is `storage.file_lock()`** — an flock on `~/.todo/todos.lock` (a sidecar, because `write_all` replaces the data file). Every mutating verb in `commands.py` and `telegram._push_task` wraps its load→write critical section in it; `cmd_refresh` holds it across the whole network window, which is what makes the interval agent and the telegram daemon safe together. On timeout (120s) it **raises `LockTimeout`** — never proceeds unlocked, because an unlocked rewrite could silently destroy a concurrent local-origin append that would never re-converge from Todoist. `cli.main` turns it into a friendly nonzero exit; `telegram._push_task`'s broad except logs it (the task is already in Todoist + the vault, so the next mirror re-imports it — and `_push_task` adopts an already-mirrored row instead of duplicating). Read-only verbs (`ls`, `audit`, dry-runs) don't take it.
 - **`cmd_rm` is local-only** — it deletes the JSONL row but does NOT close/delete the Todoist task (orphans it). Only `cmd_done` propagates.
 - **`test_session_hook_uses_refresh`** reaches outside the repo to `~/Developer/proj/cockpit/scripts/cockpit-todoist-session-hook` and `pytest.skip()`s if absent — so a standalone clone skips it rather than failing.
 
@@ -108,4 +109,5 @@ One file per capture: `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md`, 
 - **`~/Developer/proj/cockpit/todoist-structure.json`** — canonical Todoist IDs + mirror scope (see above).
 - **Obsidian vault** `~/Notes/obsidian` (captures); **Logseq graph** `~/Notes/logseq` (frozen).
 - **`ffmpeg` + `whisper.cpp`** for voice transcription; **launchd** agent `com.nathan.telegram-capture` for the daemon.
+- **launchd** agent `com.nathan.todo-refresh` (`launchd/com.nathan.todo-refresh.plist` in this repo, installed to `~/Library/LaunchAgents/`) runs `todo refresh` every 10 min + at login — the standing Todoist⇄local convergence loop. Mirrored rows import with Todoist's `added_at` as `ts`, re-derive `project`/`source` from labels on every pull, and render in `ls` with a `[mirror]` badge and `[due …]`.
 - `docs/telegram-capture.md` documents the live mobile lane. `docs/android-capture.md` is **superseded historical reference** (the old Notion→Logseq flow, retired 2026-06-01) — don't act on it.

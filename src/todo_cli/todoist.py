@@ -1,6 +1,7 @@
 """Todoist API v1 sync + reconcile."""
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
 import subprocess
@@ -281,7 +282,19 @@ def push_completions(
     return (closed, failed)
 
 
-def reconcile(entries: list[TodoEntry]) -> int:
+def reconcile(
+    entries: list[TodoEntry], *, skip_project_ids: set[str] | None = None
+) -> int:
+    """Per-task completion check for open rows with a Todoist task.
+
+    `skip_project_ids` is the refresh-path optimization: `mirror` passes the
+    project ids its absence sweep actually covered, so mirrored rows in those
+    projects need no per-task re-fetch. Rows the sweep could NOT judge — a
+    mirrored row whose project left mirror scope (archived/shared/excluded),
+    or with no stored project_id — still get fetched here; that is the only
+    remaining completion path for them. A failed mirror passes an empty set,
+    degrading to the full scan. Standalone `todo reconcile` scans everything.
+    """
     tok = token()
     if not tok:
         print("todoist: no token; skipping reconcile")
@@ -291,6 +304,12 @@ def reconcile(entries: list[TodoEntry]) -> int:
     failed = 0
     for e in entries:
         if e.sync.todoist is None or e.status != "open":
+            continue
+        if (
+            skip_project_ids
+            and e.origin == "todoist"
+            and e.sync.todoist.project_id in skip_project_ids
+        ):
             continue
         task_id = e.sync.todoist.task_id
         if not task_id:
@@ -387,6 +406,23 @@ def _first_in(labels: list[str], known: set[str]) -> str | None:
     return None
 
 
+def _added_ts(added_at: object) -> str | None:
+    """Todoist's UTC added_at -> local-tz ISO seconds (the `ts` wire format).
+
+    Lets a mirrored row carry the task's real creation time, so `ls` age and
+    sort reflect when it was typed into Todoist, not when the pull ran.
+    """
+    if not added_at or not isinstance(added_at, str):
+        return None
+    try:
+        t = dt.datetime.fromisoformat(added_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=dt.timezone.utc)
+    return t.astimezone().isoformat(timespec="seconds")
+
+
 def _included_project_ids(projects: list[dict], policy: dict) -> set[str]:
     excluded = set(policy["exclude_project_ids"])
     out: set[str] = set()
@@ -401,7 +437,12 @@ def _included_project_ids(projects: list[dict], policy: dict) -> set[str]:
     return out
 
 
-def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
+def mirror(
+    entries: list[TodoEntry],
+    *,
+    dry_run: bool = False,
+    covered: set[str] | None = None,
+) -> int:
     """Mirror in-scope Todoist tasks into the local store.
 
     Todoist is the source of truth: new remote tasks are imported as
@@ -412,6 +453,11 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
     (un-completed on web/phone, or a recurring occurrence that advanced) is
     reopened to track Todoist. Status of *locally-originated* rows is left to
     `sync`/`reconcile`/`done` — this never reopens a locally-done task.
+
+    `covered`, when passed, is filled with the project ids the absence sweep
+    actually judged — the refresh path hands it to `reconcile(skip_project_ids=…)`
+    so only sweep-covered rows skip the per-task fetch. Left empty when the
+    listing fails (degrades reconcile to a full scan).
     """
     tok = token()
     if not tok:
@@ -422,6 +468,10 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
     tax = taxonomy_labels()
     src_labels = set(tax["source"])
     proj_labels = set(tax["projects"])
+    # Empty taxonomy = the structure file was unreadable (config degrades to
+    # {}). Re-deriving labels in that state could only wipe project/source on
+    # every mirrored row, so skip the update-path re-derive entirely.
+    tax_ok = bool(src_labels or proj_labels)
 
     try:
         included = _included_project_ids(list_projects(tok), policy)
@@ -433,6 +483,8 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
     except (urllib.error.URLError, urllib.error.HTTPError) as exc:
         print(f"todoist pull: list failed: {exc}")
         return 1
+    if covered is not None:
+        covered.update(included)
 
     by_task = {
         e.sync.todoist.task_id: e
@@ -466,6 +518,13 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
                 existing.due = due
                 if existing.sync.todoist:
                     existing.sync.todoist.project_id = t.get("project_id")
+                if existing.origin == "todoist" and tax_ok:
+                    # Mirror owns these rows: keep label-derived metadata in
+                    # step so label edits made in Todoist propagate. Local-
+                    # origin rows keep their own source/project (push channel
+                    # owns that metadata).
+                    existing.source = _first_in(labels, src_labels) or "todoist"
+                    existing.project = _first_in(labels, proj_labels)
                 existing.mirrored_at = now_iso()
                 if reopen:
                     existing.status = "open"
@@ -480,6 +539,7 @@ def mirror(entries: list[TodoEntry], *, dry_run: bool = False) -> int:
             continue
         e = TodoEntry(
             text=content,
+            ts=_added_ts(t.get("added_at")) or now_iso(),
             status="open",
             source=_first_in(labels, src_labels) or "todoist",
             project=_first_in(labels, proj_labels),

@@ -83,13 +83,22 @@ def test_refresh_order_and_write_boundaries(monkeypatch):
     calls = []
 
     monkeypatch.setattr(
-        todoist, "mirror", lambda entries, dry_run=False: calls.append("mirror") or 0
+        todoist,
+        "mirror",
+        lambda entries, dry_run=False, covered=None: calls.append("mirror") or 0,
     )
     monkeypatch.setattr(
         logseq, "reconcile", lambda entries: calls.append("logseq.reconcile") or 0
     )
     monkeypatch.setattr(
-        todoist, "reconcile", lambda entries: calls.append("todoist.reconcile") or 0
+        todoist,
+        "reconcile",
+        lambda entries, skip_project_ids=None: calls.append(
+            "todoist.reconcile(covered)"
+            if skip_project_ids is not None
+            else "todoist.reconcile(full)"
+        )
+        or 0,
     )
     monkeypatch.setattr(
         logseq, "sync", lambda entries: calls.append("logseq.sync") or 0
@@ -103,7 +112,9 @@ def test_refresh_order_and_write_boundaries(monkeypatch):
     assert calls == [
         "mirror",
         "logseq.reconcile",
-        "todoist.reconcile",
+        # refresh hands mirror's covered-project set to reconcile so sweep-
+        # covered mirrored rows skip the per-task fetch.
+        "todoist.reconcile(covered)",
         "write",
         "logseq.sync",
         "todoist.sync",

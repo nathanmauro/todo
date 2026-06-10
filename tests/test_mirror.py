@@ -1,6 +1,7 @@
 """Inbound mirror (Todoist -> local): import, upsert, filter, echo-guard, sweep."""
 from __future__ import annotations
 
+import datetime as dt
 from unittest.mock import MagicMock
 
 from todo_cli import todoist
@@ -174,3 +175,60 @@ def test_mirror_dry_run_no_mutation(monkeypatch):
     entries = []
     assert todoist.mirror(entries, dry_run=True) == 0
     assert entries == []
+
+
+def test_mirror_backfills_ts_from_added_at(monkeypatch):
+    _patch(
+        monkeypatch,
+        projects=[{"id": "P1", "is_shared": False}],
+        tasks=[
+            {
+                "id": "T1",
+                "content": "typed in todoist last week",
+                "project_id": "P1",
+                "labels": [],
+                "added_at": "2026-06-05T03:13:31.000000Z",
+            }
+        ],
+    )
+    entries = []
+    todoist.mirror(entries)
+    # ts carries the Todoist creation moment (rendered in local tz), not the
+    # pull moment
+    t = dt.datetime.fromisoformat(entries[0].ts)
+    assert t.astimezone(dt.timezone.utc) == dt.datetime(
+        2026, 6, 5, 3, 13, 31, tzinfo=dt.timezone.utc
+    )
+
+
+def test_mirror_missing_added_at_falls_back_to_now(monkeypatch):
+    _patch(
+        monkeypatch,
+        projects=[{"id": "P1", "is_shared": False}],
+        tasks=[{"id": "T1", "content": "x", "project_id": "P1", "labels": []}],
+    )
+    entries = []
+    todoist.mirror(entries)
+    assert entries[0].ts  # default now_iso, never empty
+
+
+def test_mirror_update_rederives_labels_on_mirrored_rows(monkeypatch):
+    _patch(
+        monkeypatch,
+        projects=[{"id": "P1", "is_shared": False}],
+        tasks=[
+            {
+                "id": "T1",
+                "content": "remote",
+                "project_id": "P1",
+                "labels": ["claude", "todo"],
+            }
+        ],
+    )
+    e = TodoEntry(text="remote", origin="todoist", source="todoist", project=None)
+    e.sync.todoist = TodoistSync(task_id="T1", ts="x")
+    entries = [e]
+    todoist.mirror(entries)
+    # labels added in Todoist web after import now propagate
+    assert entries[0].source == "claude"
+    assert entries[0].project == "todo"

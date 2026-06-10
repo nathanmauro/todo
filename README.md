@@ -104,15 +104,40 @@ Creates a task via Todoist API v1. Tasks land in the default capture project (In
 
 `pull` makes Todoist the source of truth and the local store a read-only mirror. It lists in-scope Todoist tasks and upserts them into `todos.jsonl` keyed on `sync.todoist.task_id`: tasks created here (CLI/agents) update in place, and tasks created elsewhere (phone, web, MCP) are imported as `origin: "todoist"` rows. Imported rows are never pushed back (echo-loop guard), and a mirrored task that disappears from Todoist's active set is flipped to done.
 
+Imported rows carry Todoist's real creation time (`added_at`) as `ts`, so `ls`
+age and ordering reflect when the task was typed, not when the pull ran. On
+every pull, mirrored rows also re-derive `project`/`source` from their Todoist
+labels, so label edits made on web/phone propagate. In `ls`, Todoist-owned rows
+show a `[mirror]` badge (vs `[todoist]` for locally-created rows pushed out)
+and due dates render as `[due …]`.
+
 Scope is read from the `mirror` block of `~/Developer/proj/cockpit/todoist-structure.json` (default: every personal project, drop shared/workspace projects like Team Inbox, active tasks only). `--dry-run` reports what would change without writing.
 
 ## Refresh / Audit
 
-`refresh` is the on-demand convergence command: it pulls the Todoist mirror,
+`refresh` is the convergence command: it pulls the Todoist mirror,
 reconciles remote completion status, writes inbound state, then pushes eligible
 local-origin task completions out to Todoist (and, only when `TODO_LOGSEQ_SYNC=1`,
 to the Logseq journal). Mirrored Todoist backlog rows are deliberately skipped by
-Logseq sync so the journal only gets curated local/agent task references.
+Logseq sync so the journal only gets curated local/agent task references. The
+per-task reconcile fetch is narrowed during a refresh to the rows the mirror's
+absence sweep could not judge: local-origin rows plus any mirrored row whose
+project left mirror scope (everything sweep-covered is skipped).
+
+The launchd agent `com.nathan.todo-refresh` (`launchd/com.nathan.todo-refresh.plist`)
+runs `todo refresh` every 10 minutes (plus once at login), so tasks typed into
+Todoist anywhere appear locally without manual pulls. Install:
+
+```sh
+cp launchd/com.nathan.todo-refresh.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nathan.todo-refresh.plist
+```
+
+Unattended safety: every load→write critical section takes an `flock` on
+`~/.todo/todos.lock` (so the interval refresh and the Telegram daemon can't
+clobber each other; on a 120s timeout the verb fails loudly rather than ever
+writing unlocked), and `load_all` quarantines unparseable JSONL lines to
+`~/.todo/todos.rejects.jsonl` instead of silently dropping them.
 
 `audit` summarizes the local store counts and the expected gap between the
 Todoist backlog mirror and curated Logseq task refs.

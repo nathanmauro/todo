@@ -30,5 +30,7 @@ def sync_badges(entry: TodoEntry) -> str:
     if entry.sync.logseq:
         parts.append("logseq")
     if entry.sync.todoist:
-        parts.append("todoist")
+        # [mirror] = Todoist owns this row (imported by pull; mirror may
+        # reopen/sweep it). [todoist] = local-origin row pushed out.
+        parts.append("mirror" if entry.origin == "todoist" else "todoist")
     return " ".join(f"[{p}]" for p in parts)
