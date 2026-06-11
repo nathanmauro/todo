@@ -21,6 +21,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import subprocess
 import tempfile
 import urllib.error
@@ -32,6 +33,7 @@ from typing import Any
 from . import obsidian, todoist
 from .config import (
     KEYCHAIN_SERVICE,
+    TELEGRAM_ACTIONS,
     TELEGRAM_ALLOWED_CHATS,
     TELEGRAM_API,
     TELEGRAM_CHAT,
@@ -359,12 +361,16 @@ def last_chat_id() -> int | str | None:
     return _chat_state().get("chat_id")
 
 
-def send(text: str) -> bool:
+def send(text: str, buttons: list[tuple[str, str, str]] | None = None) -> bool:
     """Send `text` to the last-persisted chat via the bot. Returns success.
 
     Delivery enabler: turns the capture bot into a two-way channel so other
     tooling (or Nathan, via `todo telegram-send`) can push a notification to the
     phone. No-op (returns False) when there is no token or no known chat.
+
+    `buttons` makes the notification actionable: each (label, verb, payload)
+    becomes an inline button whose tap is executed by the poll daemon. The
+    action itself is stored locally (callback_data only carries a short id).
     """
     tok = token()
     if not tok:
@@ -374,8 +380,159 @@ def send(text: str) -> bool:
     if chat_id is None:
         log("telegram send: no chat_id yet (message the bot once first)")
         return False
-    resp = _api(tok, "sendMessage", {"chat_id": chat_id, "text": text})
+    params: dict[str, Any] = {"chat_id": chat_id, "text": text}
+    if buttons:
+        row = []
+        for label, verb, payload in buttons:
+            action_id = _new_action(verb, payload, label)
+            if action_id:
+                row.append({"text": label, "callback_data": action_id})
+        if row:
+            params["reply_markup"] = json.dumps({"inline_keyboard": [row]})
+    resp = _api(tok, "sendMessage", params)
     return bool(resp and resp.get("ok"))
+
+
+# --- actionable notifications: local action registry + callback execution ---
+# A button tap must round-trip through Telegram's 64-byte callback_data, so the
+# button carries only a short hex id; the real action (a closed verb + payload)
+# is a JSON file under TELEGRAM_ACTIONS written when the notification is sent.
+# The poll loop executes it exactly once and collapses the keyboard.
+
+ACTION_VERBS = {"ack", "add-task", "idea-hot"}
+_ACTION_ID_RE = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _action_path(action_id: str) -> Path | None:
+    if not _ACTION_ID_RE.fullmatch(action_id):
+        return None
+    return TELEGRAM_ACTIONS / f"{action_id}.json"
+
+
+def _new_action(verb: str, payload: str, label: str) -> str | None:
+    if verb not in ACTION_VERBS:
+        log(f"telegram action: unknown verb '{verb}' (allowed: {sorted(ACTION_VERBS)})")
+        return None
+    action_id = secrets.token_hex(6)
+    try:
+        TELEGRAM_ACTIONS.mkdir(parents=True, exist_ok=True)
+        (TELEGRAM_ACTIONS / f"{action_id}.json").write_text(
+            json.dumps(
+                {
+                    "id": action_id,
+                    "created": now_iso(),
+                    "verb": verb,
+                    "payload": payload,
+                    "label": label,
+                    "status": "pending",
+                },
+                indent=2,
+            )
+        )
+    except OSError as exc:
+        log(f"telegram action: could not register: {exc}")
+        return None
+    return action_id
+
+
+def _load_action(action_id: str) -> dict | None:
+    path = _action_path(action_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _mark_action(action_id: str, status: str, result: str = "") -> None:
+    path = _action_path(action_id)
+    action = _load_action(action_id)
+    if path is None or action is None:
+        return
+    action["status"] = status
+    action["result"] = result
+    action["resolved"] = now_iso()
+    try:
+        path.write_text(json.dumps(action, indent=2))
+    except OSError as exc:
+        log(f"telegram action: could not mark {action_id} {status}: {exc}")
+
+
+def _idea_hot(slug: str) -> str:
+    """Flip an Ideas-store file's Heat strip to Hot. Returns a toast string."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,80}", slug):
+        return "bad idea slug"
+    path = obsidian.OBSIDIAN_VAULT / "05 Notes" / "ideas" / f"idea-{slug}.md"
+    if not path.is_file():
+        return f"idea not found: {slug}"
+    try:
+        text = path.read_text(encoding="utf-8")
+        if "**Heat:** Hot" in text:
+            return "already hot 🔥"
+        new = text.replace("**Heat:** —", "**Heat:** Hot", 1)
+        if new == text:
+            return "no Heat field to flip"
+        path.write_text(new, encoding="utf-8")
+    except OSError as exc:
+        return f"idea edit failed: {exc}"
+    return "idea → Hot 🔥"
+
+
+def _execute_action(action: dict) -> str:
+    """Run one registered action. Returns the toast shown on the phone."""
+    verb = action.get("verb", "")
+    payload = str(action.get("payload") or "")
+    if verb == "ack":
+        return "✓"
+    if verb == "add-task":
+        if not payload.strip():
+            return "empty task payload"
+        if _push_task(payload, source="telegram"):
+            return "task → Todoist ✓"
+        return "Todoist push failed (see log)"
+    if verb == "idea-hot":
+        return _idea_hot(payload)
+    return f"unknown verb: {verb}"
+
+
+def _handle_callback(tok: str, cq: dict, locked: bool) -> None:
+    """Execute a button tap exactly once, collapse the keyboard, answer the toast."""
+    cq_id = str(cq.get("id") or "")
+    msg = cq.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    from_id = (cq.get("from") or {}).get("id")
+    authorized = (
+        not locked
+        or str(chat_id) in TELEGRAM_ALLOWED_CHATS
+        or str(from_id) in TELEGRAM_ALLOWED_CHATS
+    )
+    if not authorized:
+        log(f"telegram: dropped callback from unauthorized chat {chat_id}")
+        if cq_id:
+            _api(tok, "answerCallbackQuery", {"callback_query_id": cq_id})
+        return
+    action = _load_action(str(cq.get("data") or ""))
+    if action is None:
+        toast = "unknown or expired action"
+    elif action.get("status") == "done":
+        toast = "already done ✓"
+    else:
+        toast = _execute_action(action)
+        _mark_action(action["id"], "done", toast)
+        log(f"telegram action {action['id']} ({action.get('verb')}): {toast}")
+        if chat_id is not None and msg.get("message_id") is not None:
+            _api(
+                tok,
+                "editMessageReplyMarkup",
+                {
+                    "chat_id": chat_id,
+                    "message_id": msg["message_id"],
+                    "reply_markup": json.dumps({"inline_keyboard": []}),
+                },
+            )
+    if cq_id:
+        _api(tok, "answerCallbackQuery", {"callback_query_id": cq_id, "text": toast[:190]})
 
 
 # --- Obsidian-canonical capture lane (live path, 2026-06-01) ----------------
@@ -566,7 +723,7 @@ def poll_once(long_poll: bool = False) -> int:
     offset = int(_state().get("offset", 0))
     params = {
         "timeout": 25 if long_poll else 0,
-        "allowed_updates": json.dumps(["message"]),
+        "allowed_updates": json.dumps(["message", "callback_query"]),
     }
     if offset:
         params["offset"] = offset + 1
@@ -580,6 +737,10 @@ def poll_once(long_poll: bool = False) -> int:
         msg = upd.get("message") or {}
         chat_id = (msg.get("chat") or {}).get("id")
         try:
+            callback = upd.get("callback_query")
+            if callback is not None:
+                _handle_callback(tok, callback, locked)
+                continue
             if locked and str(chat_id) not in TELEGRAM_ALLOWED_CHATS:
                 log(f"telegram: dropped msg from unauthorized chat {chat_id}")
                 continue

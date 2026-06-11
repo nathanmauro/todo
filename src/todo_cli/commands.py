@@ -385,17 +385,31 @@ def cmd_note(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_button(spec: str) -> tuple[str, str, str]:
+    """Parse one --button spec: 'Label=verb[:payload]' (closed verb set)."""
+    label, sep, rest = spec.partition("=")
+    verb, _, payload = rest.partition(":")
+    if not sep or not label.strip() or verb not in telegram.ACTION_VERBS:
+        sys.exit(
+            f"bad --button {spec!r}; expected 'Label=verb[:payload]' with verb in "
+            f"{sorted(telegram.ACTION_VERBS)}"
+        )
+    return (label.strip(), verb, payload)
+
+
 def cmd_telegram_send(args: argparse.Namespace) -> int:
     """Send a message to the last chat that messaged the capture bot.
 
     Lets the bot push a notification back to Nathan's phone (delivery enabler).
     Requires that a message has been received at least once (so a chat_id is on
-    file) and that the BotFather token is stored.
+    file) and that the BotFather token is stored. --button attaches inline
+    action buttons that the poll daemon executes on tap.
     """
     text = " ".join(args.text).strip()
     if not text:
         sys.exit("empty message")
-    if telegram.send(text):
+    buttons = [_parse_button(spec) for spec in (getattr(args, "button", None) or [])]
+    if telegram.send(text, buttons=buttons or None):
         print(f"telegram: sent to chat {telegram.last_chat_id()}")
         return 0
     print(

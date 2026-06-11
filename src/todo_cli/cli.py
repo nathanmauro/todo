@@ -175,6 +175,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="send a message to the last chat that messaged the capture bot",
     )
     ts.add_argument("text", nargs="+")
+    ts.add_argument(
+        "--button",
+        action="append",
+        default=[],
+        metavar="LABEL=VERB[:PAYLOAD]",
+        help="inline action button (repeatable); verbs: ack, add-task, idea-hot",
+    )
     ts.set_defaults(func=cmd_telegram_send)
 
     audit = sub.add_parser("audit", help="summarize local sync state")

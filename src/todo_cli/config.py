@@ -134,6 +134,13 @@ TELEGRAM_CHAT = Path(
     os.environ.get("TODO_TELEGRAM_CHAT", TODO_DIR / "telegram-chat.json")
 )
 TELEGRAM_ENABLED = os.environ.get("TODO_TELEGRAM", "1") != "0"
+# Action registry for actionable notifications: callback_data is capped at 64
+# bytes, so an inline button carries only a short id and the full action (verb +
+# payload) lives here as one JSON file, written at send time and executed when
+# the tap's callback_query arrives through the same long poll.
+TELEGRAM_ACTIONS = Path(
+    os.environ.get("TODO_TELEGRAM_ACTIONS", TODO_DIR / "telegram-actions")
+)
 # Single-user lock: comma-separated numeric chat ids allowed to drive the bot.
 # Empty = accept any chat (and the bot's reply tells you your chat_id so you can
 # lock it). A non-empty list silently drops messages from any other chat.
