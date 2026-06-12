@@ -736,8 +736,30 @@ def _route_message(
     return kind, path
 
 
-def _reply(tok: str, chat_id, kind: str, locked: bool) -> None:
+def _obsidian_deep_link(path: Path) -> str:
+    """Return an obsidian:// URI that opens `path` in the Android/iOS app.
+
+    The vault name is the directory-name of OBSIDIAN_VAULT (e.g. "obsidian").
+    The file parameter is vault-relative, URL-encoded (spaces → %20).
+    """
+    vault_name = obsidian.OBSIDIAN_VAULT.name
+    try:
+        rel = path.relative_to(obsidian.OBSIDIAN_VAULT)
+    except ValueError:
+        rel = path  # fallback: use whatever path we have
+    encoded = urllib.parse.quote(str(rel), safe="/")
+    return (
+        f"obsidian://open"
+        f"?vault={urllib.parse.quote(vault_name)}"
+        f"&file={encoded}"
+    )
+
+
+def _reply(tok: str, chat_id, kind: str, locked: bool,
+           path: Path | None = None) -> None:
     msg = f"filed ✓ {kind}" + (" → Todoist" if kind == "task" else "")
+    if path is not None:
+        msg += f"\n{_obsidian_deep_link(path)}"
     if not locked:
         msg += (
             f"\nchat_id {chat_id} — set TELEGRAM_ALLOWED_CHAT_ID to this "
@@ -786,10 +808,10 @@ def poll_once(long_poll: bool = False) -> int:
             # with no capturable text (e.g. a "/start"), so the channel opens on
             # first contact.
             _save_chat_id(chat_id)
-            kind, _ = _route_message(msg, tok)
+            kind, capture_path = _route_message(msg, tok)
             filed += 1
             if chat_id is not None:
-                _reply(tok, chat_id, kind, locked)
+                _reply(tok, chat_id, kind, locked, path=capture_path)
         finally:
             _save_offset(last_id)  # advance past every handled update
     if filed:

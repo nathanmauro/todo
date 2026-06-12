@@ -266,3 +266,79 @@ def test_send_no_token_is_noop(chat_file, monkeypatch):
         lambda *a, **k: pytest.fail("must not call the API with no token"),
     )
     assert telegram.send("no token") is False
+
+
+# --- Obsidian deep-link in reply ------------------------------------------------
+
+def test_obsidian_deep_link_format(vault):
+    """_obsidian_deep_link produces the correct obsidian:// URI."""
+    import urllib.parse
+    path = vault / "captures" / "2026-06-12" / "143022-telegram-ab12cd34.md"
+    link = telegram._obsidian_deep_link(path)
+    assert link.startswith("obsidian://open?vault=")
+    # vault name is the directory name (monkeypatched to tmp_path)
+    assert f"vault={urllib.parse.quote(vault.name)}" in link
+    assert "file=captures/2026-06-12/143022-telegram-ab12cd34.md" in link
+    # no double-encoding: path separator must stay as /
+    assert "%2F" not in link
+
+
+def test_reply_includes_deep_link(vault, monkeypatch):
+    """_reply appends an obsidian:// link when a path is provided."""
+    sent = {}
+
+    def fake_api(tok, method, params, timeout=35.0):
+        sent.update(params)
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    capture_path = vault / "captures" / "2026-06-12" / "143022-telegram-ab12cd34.md"
+    telegram._reply("TOK", 42, "note", locked=True, path=capture_path)
+    assert "obsidian://open" in sent.get("text", "")
+    assert "captures/2026-06-12/143022-telegram-ab12cd34.md" in sent["text"]
+
+
+def test_reply_no_path_omits_deep_link(vault, monkeypatch):
+    """_reply without a path sends the plain 'filed ✓' message."""
+    sent = {}
+
+    def fake_api(tok, method, params, timeout=35.0):
+        sent.update(params)
+        return {"ok": True, "result": {}}
+
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    telegram._reply("TOK", 42, "note", locked=True, path=None)
+    assert "obsidian://" not in sent.get("text", "")
+    assert "filed ✓" in sent["text"]
+
+
+def test_poll_once_reply_contains_deep_link(telegram_poll_env, vault, monkeypatch):
+    """End-to-end: polling a text message sends a reply with an obsidian:// link."""
+    replies: list[dict] = []
+
+    def fake_api(tok, method, params, timeout=35.0):
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [{
+                    "update_id": 20,
+                    "message": {
+                        "message_id": 99,
+                        "date": 1780500000,
+                        "chat": {"id": 123, "type": "private"},
+                        "text": "a thought to capture",
+                    },
+                }],
+            }
+        if method == "sendMessage":
+            replies.append(params)
+            return {"ok": True, "result": {"message_id": 100}}
+        raise AssertionError(method)
+
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    assert telegram.poll_once() == 1
+    assert replies, "bot must send a reply"
+    reply_text = replies[0]["text"]
+    assert "filed ✓" in reply_text
+    assert "obsidian://open" in reply_text
+    assert "captures/" in reply_text
