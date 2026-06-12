@@ -151,3 +151,67 @@ def test_idea_hot_flips_heat_strip(actions_env, vault, monkeypatch):
 
 def test_idea_hot_rejects_traversal_slug(actions_env):
     assert telegram._idea_hot("../../etc/passwd") == "bad idea slug"
+
+
+def test_send_chunks_buttons_into_rows_of_three(actions_env, monkeypatch):
+    api = ApiRecorder()
+    monkeypatch.setattr(telegram, "_api", api)
+
+    buttons = [(f"B{i}", "ack", "") for i in range(5)]
+    assert telegram.send("digest", buttons=buttons)
+
+    keyboard = json.loads(api.of("sendMessage")[0]["reply_markup"])["inline_keyboard"]
+    assert [[b["text"] for b in row] for row in keyboard] == [["B0", "B1", "B2"], ["B3", "B4"]]
+
+
+def test_callback_completes_todo_once(actions_env, monkeypatch):
+    from todo_cli.models import TodoEntry
+    from todo_cli.storage import load_all, write_all
+
+    entry = TodoEntry(text="Buy milk", source="claude")
+    write_all([entry])
+    pushed = []
+    monkeypatch.setattr(
+        telegram.todoist,
+        "push_completions",
+        lambda entries, tok=None: pushed.extend(e.id for e in entries) or (1, 0),
+    )
+    action_id = telegram._new_action("todoist-complete", entry.id, "✓ 1")
+    api = ApiRecorder(updates=[callback_update(action_id)])
+    monkeypatch.setattr(telegram, "_api", api)
+
+    telegram.poll_once()
+
+    assert pushed == [entry.id]
+    stored = load_all()[0]
+    assert stored.status == "done" and stored.done_source == "telegram"
+    assert api.of("answerCallbackQuery")[0]["text"] == "done ✓ Buy milk"
+
+    # second tap: the row is already done — no second push
+    api2 = ApiRecorder(updates=[callback_update(action_id, update_id=51)])
+    monkeypatch.setattr(telegram, "_api", api2)
+    telegram.poll_once()
+    assert pushed == [entry.id]
+    assert api2.of("answerCallbackQuery")[0]["text"] == "already done ✓"
+
+
+def test_complete_todo_pending_when_push_fails(actions_env, monkeypatch):
+    from todo_cli.models import TodoEntry
+    from todo_cli.storage import load_all, write_all
+
+    entry = TodoEntry(text="Call school", source="claude")
+    write_all([entry])
+    monkeypatch.setattr(
+        telegram.todoist, "push_completions", lambda entries, tok=None: (0, 1)
+    )
+
+    toast = telegram._complete_todo(entry.id)
+
+    # local done survives a failed remote leg; next sync retries
+    assert load_all()[0].status == "done"
+    assert toast == "done ✓ Call school (Todoist pending)"
+
+
+def test_complete_todo_rejects_bad_or_missing_id(actions_env):
+    assert telegram._complete_todo("../../etc") == "bad todo id"
+    assert telegram._complete_todo("deadbeef0000") == "todo not found"

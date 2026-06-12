@@ -180,7 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="LABEL=VERB[:PAYLOAD]",
-        help="inline action button (repeatable); verbs: ack, add-task, idea-hot",
+        help=(
+            "inline action button (repeatable); "
+            "verbs: ack, add-task, idea-hot, todoist-complete"
+        ),
     )
     ts.set_defaults(func=cmd_telegram_send)
 

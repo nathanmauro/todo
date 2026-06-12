@@ -43,7 +43,7 @@ from .config import (
     WHISPER_MODEL,
 )
 from .models import TodoEntry, TodoistSync, now_iso
-from .storage import file_lock, load_all, log, write_all
+from .storage import file_lock, find_by_prefix, load_all, log, write_all
 
 
 def token() -> str | None:
@@ -388,7 +388,10 @@ def send(text: str, buttons: list[tuple[str, str, str]] | None = None) -> bool:
             if action_id:
                 row.append({"text": label, "callback_data": action_id})
         if row:
-            params["reply_markup"] = json.dumps({"inline_keyboard": [row]})
+            # Telegram renders one row N-wide; past 3 buttons the labels get
+            # crushed on a phone, so wrap into rows of 3.
+            keyboard = [row[i : i + 3] for i in range(0, len(row), 3)]
+            params["reply_markup"] = json.dumps({"inline_keyboard": keyboard})
     resp = _api(tok, "sendMessage", params)
     return bool(resp and resp.get("ok"))
 
@@ -399,7 +402,7 @@ def send(text: str, buttons: list[tuple[str, str, str]] | None = None) -> bool:
 # is a JSON file under TELEGRAM_ACTIONS written when the notification is sent.
 # The poll loop executes it exactly once and collapses the keyboard.
 
-ACTION_VERBS = {"ack", "add-task", "idea-hot"}
+ACTION_VERBS = {"ack", "add-task", "idea-hot", "todoist-complete"}
 _ACTION_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
@@ -479,6 +482,38 @@ def _idea_hot(slug: str) -> str:
     return "idea → Hot 🔥"
 
 
+def _complete_todo(id_prefix: str) -> str:
+    """Mark a local todo done and propagate the close to Todoist. Toast string.
+
+    Mirrors `todo done`: the local "done" is persisted before the network leg so
+    a stalled Todoist can never cost the completion; push_completions is
+    best-effort and the next `todo sync`/`refresh` flushes whatever didn't land.
+    The frozen Logseq leg is deliberately skipped.
+    """
+    if not re.fullmatch(r"[0-9a-f]{6,32}", id_prefix):
+        return "bad todo id"
+    try:
+        with file_lock():
+            entries = load_all()
+            target = find_by_prefix(entries, id_prefix)
+            if not target:
+                return "todo not found"
+            if target.status == "done":
+                return "already done ✓"
+            target.status = "done"
+            target.done_ts = now_iso()
+            target.done_source = target.done_source or "telegram"
+            write_all(entries)
+            closed, _ = todoist.push_completions([target])
+            write_all(entries)
+    except Exception as exc:  # noqa: BLE001 — a tap must always toast, not crash the poll
+        log(f"telegram complete: {exc}")
+        return "complete failed (see log)"
+    label = target.text if len(target.text) <= 40 else target.text[:39] + "…"
+    suffix = "" if closed else " (Todoist pending)"
+    return f"done ✓ {label}{suffix}"
+
+
 def _execute_action(action: dict) -> str:
     """Run one registered action. Returns the toast shown on the phone."""
     verb = action.get("verb", "")
@@ -493,6 +528,8 @@ def _execute_action(action: dict) -> str:
         return "Todoist push failed (see log)"
     if verb == "idea-hot":
         return _idea_hot(payload)
+    if verb == "todoist-complete":
+        return _complete_todo(payload)
     return f"unknown verb: {verb}"
 
 
