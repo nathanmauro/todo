@@ -28,6 +28,7 @@ from .commands import (
     cmd_sync,
     cmd_telegram_poll,
     cmd_telegram_send,
+    cmd_transcribe,
 )
 
 
@@ -186,6 +187,30 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ts.set_defaults(func=cmd_telegram_send)
+
+    tr = sub.add_parser(
+        "transcribe",
+        help="transcribe audio files to Markdown captures in the Obsidian vault",
+    )
+    tr.add_argument("files", nargs="+", metavar="FILE", help="audio file(s) to transcribe")
+    tr.add_argument(
+        "--dest",
+        metavar="DIR",
+        default=None,
+        help="output directory (default: captures/YYYY-MM-DD/ in the vault)",
+    )
+    tr.add_argument(
+        "--model",
+        metavar="NAME",
+        default=None,
+        help="whisper model path (default: auto-select based on duration)",
+    )
+    tr.add_argument(
+        "--srt",
+        action="store_true",
+        help="also write an .srt subtitle file alongside each .md",
+    )
+    tr.set_defaults(func=cmd_transcribe)
 
     audit = sub.add_parser("audit", help="summarize local sync state")
     audit.set_defaults(func=cmd_audit)

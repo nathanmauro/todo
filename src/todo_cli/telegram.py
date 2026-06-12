@@ -30,7 +30,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from . import obsidian, todoist
+from . import obsidian, todoist, transcribe as _transcribe_mod
 from .config import (
     KEYCHAIN_SERVICE,
     TELEGRAM_ACTIONS,
@@ -291,26 +291,12 @@ def _download_attachment(
 
 
 def _transcribe(audio: Path) -> str | None:
-    """OGG/Opus -> 16k mono WAV (ffmpeg) -> text (whisper.cpp). None if unset."""
-    if not WHISPER_MODEL:
-        return None
-    wav = audio.with_suffix(".wav")
-    try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", str(audio), "-ar", "16000", "-ac", "1",
-             "-f", "wav", str(wav)],
-            capture_output=True, check=True,
-        )
-        r = subprocess.run(
-            [WHISPER_BIN, "-m", WHISPER_MODEL, "-f", str(wav), "-nt", "-np"],
-            capture_output=True, text=True, check=True,
-        )
-        return " ".join(r.stdout.split()).strip() or None
-    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
-        log(f"transcribe error: {exc}")
-        return None
-    finally:
-        wav.unlink(missing_ok=True)
+    """OGG/Opus -> 16k mono WAV (ffmpeg) -> text (whisper.cpp). None if unset.
+
+    Delegates to transcribe.transcribe(); kept as a thin wrapper so the
+    telegram module surface and tests remain unchanged.
+    """
+    return _transcribe_mod.transcribe(audio)
 
 
 def message_text(msg: dict, tok: str) -> str | None:

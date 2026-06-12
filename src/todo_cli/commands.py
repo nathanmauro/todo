@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime as _dt
 import io
 import os
+import secrets as _secrets
 import subprocess
 import sys
 from pathlib import Path
 
-from . import backlog, logseq, obsidian, plan, telegram, todoist
+from . import backlog, logseq, obsidian, plan, telegram, todoist, transcribe as _transcribe_mod
 from .config import (
     LOGSEQ_GRAPH,
     LOGSEQ_SYNC_ENABLED,
@@ -479,3 +481,77 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         f"exclude_ids={pol['exclude_project_ids'] or '[]'}"
     )
     return 0 if ok else 1
+
+
+def cmd_transcribe(args: argparse.Namespace) -> int:
+    """Transcribe audio files to Markdown captures in the Obsidian vault.
+
+    Runs ffmpeg + whisper.cpp over each FILE and writes one capture per input
+    under --dest (default: captures/YYYY-MM-DD/ in the vault). Uses the audio
+    file's mtime for the 'created' frontmatter field. Auto-selects ggml-small.en
+    for recordings longer than 10 minutes when the model is present; use --model
+    to override. --srt additionally writes a .srt file alongside each .md when
+    whisper-cli supports it.
+    """
+    files = [Path(f) for f in args.files]
+    dest = Path(args.dest) if args.dest else _transcribe_mod.default_dest()
+    model_override = getattr(args, "model", None) or None
+    want_srt = getattr(args, "srt", False)
+
+    rc = 0
+    for audio in files:
+        if not audio.exists():
+            print(f"transcribe: file not found: {audio}", file=sys.stderr)
+            rc = 1
+            continue
+
+        chosen_model = _transcribe_mod.select_model(audio, model_override)
+        if not chosen_model:
+            print(
+                f"transcribe: no whisper model configured — set TODO_WHISPER_MODEL "
+                f"or place ggml-base.en.bin at ~/.cache/whisper/",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Derive id8 and created timestamp here so SRT and .md share the same stem.
+        mtime = audio.stat().st_mtime
+        created_dt = _dt.datetime.fromtimestamp(mtime).astimezone()
+        id8 = _secrets.token_hex(4)
+        dest.mkdir(parents=True, exist_ok=True)
+        md_name = f"{created_dt.strftime('%H%M%S')}-transcribe-{id8}.md"
+        md_path = dest / md_name
+        srt_path = dest / (md_name[:-3] + ".srt") if want_srt else None
+
+        text = _transcribe_mod.transcribe(
+            audio,
+            model=chosen_model,
+            srt_dest=srt_path,
+        )
+        if text is None:
+            print(f"transcribe: failed for {audio}", file=sys.stderr)
+            rc = 1
+            continue
+
+        # Write capture with the pre-computed id8 and created timestamp
+        frontmatter = (
+            "---\n"
+            f"id: {id8}\n"
+            f"created: {created_dt.isoformat(timespec='seconds')}\n"
+            "source: transcribe\n"
+            "type: note\n"
+            "status: open\n"
+            "tags: [voice]\n"
+            f"audio: {audio.name}\n"
+            "---\n"
+        )
+        md_path.write_text(frontmatter + "\n" + text + "\n")
+
+        msg = f"transcribe → {md_path}"
+        if srt_path and srt_path.exists():
+            msg += f"  srt → {srt_path}"
+        elif want_srt and srt_path and not srt_path.exists():
+            msg += "  (srt: whisper produced no output for this file)"
+        print(msg)
+
+    return rc
