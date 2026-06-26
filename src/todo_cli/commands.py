@@ -391,10 +391,10 @@ def _parse_button(spec: str) -> tuple[str, str, str]:
     """Parse one --button spec: 'Label=verb[:payload]' (closed verb set)."""
     label, sep, rest = spec.partition("=")
     verb, _, payload = rest.partition(":")
-    if not sep or not label.strip() or verb not in telegram.ACTION_VERBS:
+    if not sep or not label.strip() or (verb not in telegram.ACTION_VERBS and not verb.startswith("agent-")):
         sys.exit(
             f"bad --button {spec!r}; expected 'Label=verb[:payload]' with verb in "
-            f"{sorted(telegram.ACTION_VERBS)}"
+            f"{sorted(telegram.ACTION_VERBS)} or starting with 'agent-'"
         )
     return (label.strip(), verb, payload)
 

@@ -342,3 +342,130 @@ def test_poll_once_reply_contains_deep_link(telegram_poll_env, vault, monkeypatc
     assert "filed ✓" in reply_text
     assert "obsidian://open" in reply_text
     assert "captures/" in reply_text
+
+
+# --- agent lane: bridge dispatch + security gate ----------------------------
+
+class _FakeProcess:
+    """Minimal subprocess.CompletedProcess stand-in for monkeypatching."""
+    def __init__(self, stdout="", stderr="", returncode=0):
+        self.stdout = stdout
+        self.stderr = stderr
+        self.returncode = returncode
+
+
+def test_poll_once_agent_prefix_fires_bridge_no_capture_no_reply(
+    telegram_poll_env, vault, monkeypatch
+):
+    """/claude ... must invoke the bridge, write NO capture file, and skip 'filed' reply.
+
+    The bridge sends its own rich Telegram reply; todo must stay out of the way.
+    """
+    bridge_calls: list[list] = []
+    api_methods: list[str] = []
+
+    def fake_run(args, **kwargs):
+        bridge_calls.append(list(args))
+        return _FakeProcess(stdout="agent fired")
+
+    def fake_api(tok, method, params, timeout=35.0):
+        api_methods.append(method)
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [{
+                    "update_id": 50,
+                    "message": {
+                        "message_id": 200,
+                        "date": 1780500000,
+                        "chat": {"id": 123, "type": "private"},
+                        "text": "/claude fix the bug in cockpit",
+                    },
+                }],
+            }
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": 201}}
+        raise AssertionError(f"unexpected API method: {method}")
+
+    monkeypatch.setenv("TODO_AGENT_BRIDGE_CMD", "/fake/cockpit-remote-fire")
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    monkeypatch.setattr(telegram.subprocess, "run", fake_run)
+
+    filed = telegram.poll_once()
+
+    # Bridge must have been invoked exactly once with the right shape
+    assert len(bridge_calls) == 1
+    call = bridge_calls[0]
+    assert call[0] == "/fake/cockpit-remote-fire"
+    assert "--chat-id" in call
+    assert "--text" in call
+    text_idx = call.index("--text") + 1
+    assert call[text_idx] == "/claude fix the bug in cockpit"
+
+    # No capture file must be written (bridge owns the reply, not todo)
+    captures = list(obsidian.captures_root().glob("*/*.md"))
+    assert captures == [], "agent message must not write a capture file"
+
+    # No 'filed ✓' sendMessage from todo (bridge sends its own reply)
+    assert "sendMessage" not in api_methods, (
+        "todo must not send a 'filed' reply for agent messages"
+    )
+
+    # Not counted as a filed capture
+    assert filed == 0
+
+
+def test_poll_once_agent_prefix_empty_allowlist_falls_through_to_capture(
+    vault, tmp_path, monkeypatch
+):
+    """Agent command with EMPTY allow-list must NOT fire the bridge; falls through to capture.
+
+    Security gate: open-mode bots (no TELEGRAM_ALLOWED_CHAT_ID set) must never
+    dispatch agents from arbitrary senders.
+    """
+    bridge_calls: list[list] = []
+
+    def fake_run(args, **kwargs):
+        bridge_calls.append(list(args))
+        return _FakeProcess()
+
+    def fake_api(tok, method, params, timeout=35.0):
+        if method == "getUpdates":
+            return {
+                "ok": True,
+                "result": [{
+                    "update_id": 51,
+                    "message": {
+                        "message_id": 202,
+                        "date": 1780500000,
+                        "chat": {"id": 456, "type": "private"},
+                        "text": "/claude do something dangerous",
+                    },
+                }],
+            }
+        if method == "sendMessage":
+            return {"ok": True, "result": {"message_id": 203}}
+        raise AssertionError(f"unexpected API method: {method}")
+
+    # Wire up the fixture manually so we can set TELEGRAM_ALLOWED_CHATS = []
+    monkeypatch.setattr(telegram, "TELEGRAM_STATE", tmp_path / "telegram-state.json")
+    monkeypatch.setattr(telegram, "TELEGRAM_CHAT", tmp_path / "telegram-chat.json")
+    monkeypatch.setattr(telegram, "TELEGRAM_ALLOWED_CHATS", [])  # open mode — no allowlist
+    monkeypatch.setattr(telegram, "token", lambda: "TESTTOK")
+    monkeypatch.setattr(telegram, "_push_task", lambda *a, **k: None)
+    monkeypatch.setenv("TODO_AGENT_BRIDGE_CMD", "/fake/cockpit-remote-fire")
+    monkeypatch.setattr(telegram, "_api", fake_api)
+    monkeypatch.setattr(telegram.subprocess, "run", fake_run)
+
+    filed = telegram.poll_once()
+
+    # Bridge must NOT have been called — no allowlist means no agent dispatch
+    assert bridge_calls == [], "bridge must not fire when allow-list is empty"
+
+    # Message must fall through to normal capture as a plain note
+    captures = list(obsidian.captures_root().glob("*/*.md"))
+    assert len(captures) == 1, "message must fall through to normal vault capture"
+    body = captures[0].read_text()
+    assert "/claude do something dangerous" in body
+
+    assert filed == 1, "fell-through message must count as a normal filed capture"

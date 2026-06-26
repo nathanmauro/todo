@@ -399,8 +399,8 @@ def _action_path(action_id: str) -> Path | None:
 
 
 def _new_action(verb: str, payload: str, label: str) -> str | None:
-    if verb not in ACTION_VERBS:
-        log(f"telegram action: unknown verb '{verb}' (allowed: {sorted(ACTION_VERBS)})")
+    if verb not in ACTION_VERBS and not verb.startswith("agent-"):
+        log(f"telegram action: unknown verb '{verb}' (allowed: {sorted(ACTION_VERBS)} + agent-*)")
         return None
     action_id = secrets.token_hex(6)
     try:
@@ -500,7 +500,7 @@ def _complete_todo(id_prefix: str) -> str:
     return f"done ✓ {label}{suffix}"
 
 
-def _execute_action(action: dict) -> str:
+def _execute_action(action: dict, chat_id=None) -> str:
     """Run one registered action. Returns the toast shown on the phone."""
     verb = action.get("verb", "")
     payload = str(action.get("payload") or "")
@@ -516,6 +516,25 @@ def _execute_action(action: dict) -> str:
         return _idea_hot(payload)
     if verb == "todoist-complete":
         return _complete_todo(payload)
+    if verb.startswith("agent-"):
+        # Defense-in-depth: require a non-empty allow-list before dispatching
+        # agent actions via callbacks, matching the message-lane gate in
+        # _route_message ("open-mode bots must never fire agents from arbitrary senders").
+        if not TELEGRAM_ALLOWED_CHATS:
+            log("telegram: agent-action blocked — TELEGRAM_ALLOWED_CHATS is empty (open mode)")
+            return "agent actions require a configured chat allow-list"
+        bridge = os.environ.get("TODO_AGENT_BRIDGE_CMD", "")
+        if not bridge:
+            return "agent bridge not configured (set TODO_AGENT_BRIDGE_CMD)"
+        args = [bridge, "--action", verb, "--payload", payload]
+        if chat_id is not None:
+            args += ["--chat-id", str(chat_id)]
+        try:
+            r = subprocess.run(args, capture_output=True, text=True, timeout=30)
+            return r.stdout.strip() or r.stderr.strip() or "done"
+        except Exception as exc:  # noqa: BLE001 — a tap must always toast, not crash
+            log(f"telegram agent-action {verb}: {exc}")
+            return f"agent-action failed: {exc}"
     return f"unknown verb: {verb}"
 
 
@@ -541,7 +560,7 @@ def _handle_callback(tok: str, cq: dict, locked: bool) -> None:
     elif action.get("status") == "done":
         toast = "already done ✓"
     else:
-        toast = _execute_action(action)
+        toast = _execute_action(action, chat_id=chat_id)
         _mark_action(action["id"], "done", toast)
         log(f"telegram action {action['id']} ({action.get('verb')}): {toast}")
         if chat_id is not None and msg.get("message_id") is not None:
@@ -562,6 +581,18 @@ def _handle_callback(tok: str, cq: dict, locked: bool) -> None:
 # A message becomes one Markdown file in the vault; tasks also push to Todoist.
 
 _PREFIXES = {"+t": "task", "+task": "task", "+i": "idea", "+idea": "idea"}
+
+_AGENT_PREFIX_DEFAULTS = frozenset({"/claude", "/sessions", "/kill"})
+# NOTE: /codex is intentionally absent — cockpit-remote-fire has no /codex handler;
+# adding it here without a matching dispatch case would silently drop messages.
+
+
+def _agent_prefixes() -> frozenset[str]:
+    """Agent-command prefix set (from TODO_AGENT_PREFIXES env, comma-separated)."""
+    raw = os.environ.get("TODO_AGENT_PREFIXES", "")
+    if raw:
+        return frozenset(p.strip() for p in raw.split(",") if p.strip())
+    return _AGENT_PREFIX_DEFAULTS
 
 
 def classify(text: str) -> tuple[str, str]:
@@ -682,9 +713,32 @@ def _extra_body(
 
 def _route_message(
     msg: dict, tok: str, source: str = "telegram"
-) -> tuple[str, Path]:
-    """Route any authorized Telegram message into the vault without dropping it."""
+) -> tuple[str, Path | None]:
+    """Route any authorized Telegram message into the vault without dropping it.
+
+    Returns ("agent", None) when the message is handed off to the agent bridge
+    (no capture file is written; the bridge sends its own Telegram reply).
+    """
     text = message_text(msg, tok)
+
+    # --- Agent lane: detect agent prefix BEFORE classify ---
+    # Gate: bridge env must be set AND allow-list non-empty (security — open-mode
+    # bots must never fire agents from arbitrary senders).
+    bridge = os.environ.get("TODO_AGENT_BRIDGE_CMD", "")
+    if text and bridge and TELEGRAM_ALLOWED_CHATS:
+        stripped = text.strip()
+        first_word = stripped.split()[0] if stripped else ""
+        if first_word in _agent_prefixes():
+            chat_id = (msg.get("chat") or {}).get("id")
+            try:
+                subprocess.run(
+                    [bridge, "--chat-id", str(chat_id), "--text", text],
+                    capture_output=True, text=True, timeout=60,
+                )
+            except Exception as exc:  # noqa: BLE001 — capture path must survive
+                log(f"telegram: agent bridge error: {exc}")
+            return "agent", None
+
     content_types = _content_types(msg)
     stamp = _message_datetime(msg)
     attachment_folder = (
@@ -795,9 +849,12 @@ def poll_once(long_poll: bool = False) -> int:
             # first contact.
             _save_chat_id(chat_id)
             kind, capture_path = _route_message(msg, tok)
-            filed += 1
-            if chat_id is not None:
-                _reply(tok, chat_id, kind, locked, path=capture_path)
+            if kind != "agent":
+                # Agent messages are not filed into the vault; the bridge handles
+                # its own Telegram reply, so we skip both the counter and _reply.
+                filed += 1
+                if chat_id is not None:
+                    _reply(tok, chat_id, kind, locked, path=capture_path)
         finally:
             _save_offset(last_id)  # advance past every handled update
     if filed:
