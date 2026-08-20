@@ -103,6 +103,19 @@ TODOIST_PROJECT_ID = _default_project_id()
 
 KEYCHAIN_SERVICE = "todo-cli"
 
+# --- Task backend (2026-08-20 Todoist -> Google Tasks migration) ------------
+# Where outbound task captures push: "todoist" (default until cutover) or
+# "gtasks". Cutover = TODO_TASK_BACKEND=gtasks in the daemon/shell environment
+# (or flip this default in one commit once the migrated board is trusted).
+# Either way the local todos.jsonl row lands first, so a capture survives any
+# backend outage and `todo sync` retries it.
+GWS_BIN = os.environ.get("TODO_GWS_BIN", "gws")
+GTASKS_PRIMARY_LIST = os.environ.get("TODO_GTASKS_LIST", "Tasks")
+
+
+def task_backend() -> str:
+    return os.environ.get("TODO_TASK_BACKEND", "todoist").strip().lower()
+
 # --- Logseq task sync (frozen archive; OFF by default) ----------------------
 # Logseq (~/Notes/logseq) became a FROZEN read-only archive on 2026-06-01. The
 # CLI no longer writes task blocks/journal lines there unless this flag is

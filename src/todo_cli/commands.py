@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import backlog, logseq, obsidian, plan, telegram, todoist, transcribe as _transcribe_mod
+from . import backlog, config, gtasks, logseq, obsidian, plan, telegram, todoist, transcribe as _transcribe_mod
 from .config import (
     LOGSEQ_GRAPH,
     LOGSEQ_SYNC_ENABLED,
@@ -42,10 +42,13 @@ def _run_quiet(func, *args, quiet: bool = False, **kwargs):
 
 
 def _sync_outbound(entries: list[TodoEntry], *, quiet: bool = False) -> int:
-    """Push eligible local-origin task state to Logseq and Todoist."""
+    """Push eligible local-origin task state to Logseq and the task backend."""
     rc = 0
     rc |= _run_quiet(logseq.sync, entries, quiet=quiet)
-    rc |= _run_quiet(todoist.sync, entries, quiet=quiet)
+    if config.task_backend() == "gtasks":
+        rc |= _run_quiet(gtasks.sync, entries, quiet=quiet)
+    else:
+        rc |= _run_quiet(todoist.sync, entries, quiet=quiet)
     return rc
 
 

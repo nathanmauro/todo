@@ -30,7 +30,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from . import obsidian, todoist, transcribe as _transcribe_mod
+from . import gtasks, obsidian, todoist, transcribe as _transcribe_mod
 from .config import (
     KEYCHAIN_SERVICE,
     TELEGRAM_ACTIONS,
@@ -41,6 +41,7 @@ from .config import (
     TELEGRAM_STATE,
     WHISPER_BIN,
     WHISPER_MODEL,
+    task_backend as config_task_backend,
 )
 from .models import TodoEntry, TodoistSync, now_iso
 from .storage import file_lock, find_by_prefix, load_all, log, write_all
@@ -388,7 +389,7 @@ def send(text: str, buttons: list[tuple[str, str, str]] | None = None) -> bool:
 # is a JSON file under TELEGRAM_ACTIONS written when the notification is sent.
 # The poll loop executes it exactly once and collapses the keyboard.
 
-ACTION_VERBS = {"ack", "add-task", "idea-hot", "todoist-complete"}
+ACTION_VERBS = {"ack", "add-task", "idea-hot", "todoist-complete", "gtasks-complete"}
 _ACTION_ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
@@ -500,6 +501,36 @@ def _complete_todo(id_prefix: str) -> str:
     return f"done ✓ {label}{suffix}"
 
 
+def _gtasks_complete(payload: str) -> str:
+    """Complete a Google Tasks task from an inline button.
+
+    Payload is "<list_id>:<task_id>" (from e.g. cockpit-gtasks-digest
+    --buttons). Also flips any local row stamped with that task id.
+    """
+    lid, sep, task_id = payload.partition(":")
+    if not sep or not lid or not task_id:
+        return "bad gtasks payload"
+    try:
+        gtasks.complete_task(lid, task_id)
+    except Exception as exc:  # noqa: BLE001 — a tap must always toast, not crash the poll
+        log(f"telegram gtasks-complete: {exc}")
+        return "complete failed (see log)"
+    try:
+        with file_lock():
+            entries = load_all()
+            for e in entries:
+                if e.sync.gtasks and e.sync.gtasks.task_id == task_id:
+                    if e.status != "done":
+                        e.status = "done"
+                        e.done_ts = now_iso()
+                        e.done_source = e.done_source or "telegram"
+                    e.sync.gtasks.closed_ts = now_iso()
+            write_all(entries)
+    except Exception as exc:  # noqa: BLE001 — Google side is done; local flip is best-effort
+        log(f"telegram gtasks-complete local flip: {exc}")
+    return "done ✓"
+
+
 def _execute_action(action: dict, chat_id=None) -> str:
     """Run one registered action. Returns the toast shown on the phone."""
     verb = action.get("verb", "")
@@ -510,12 +541,14 @@ def _execute_action(action: dict, chat_id=None) -> str:
         if not payload.strip():
             return "empty task payload"
         if _push_task(payload, source="telegram"):
-            return "task → Todoist ✓"
-        return "Todoist push failed (see log)"
+            return f"task → {_task_backend_name()} ✓"
+        return f"{_task_backend_name()} push failed (see log)"
     if verb == "idea-hot":
         return _idea_hot(payload)
     if verb == "todoist-complete":
         return _complete_todo(payload)
+    if verb == "gtasks-complete":
+        return _gtasks_complete(payload)
     if verb.startswith("agent-"):
         # Defense-in-depth: require a non-empty allow-list before dispatching
         # agent actions via callbacks, matching the message-lane gate in
@@ -615,14 +648,48 @@ def classify(text: str) -> tuple[str, str]:
     return "note", stripped
 
 
+def _task_backend_name() -> str:
+    """Display name for the active task backend ("Todoist"/"Google Tasks")."""
+    return "Google Tasks" if config_task_backend() == "gtasks" else "Todoist"
+
+
+def _push_task_gtasks(text: str, source: str = "telegram") -> bool:
+    """Google Tasks lane of _push_task — FAIL-CLOSED.
+
+    The local todos.jsonl row is appended BEFORE the network push, so a failed
+    or offline push leaves a queued row that the next `todo sync` (gtasks.sync)
+    picks up. Contrast with the Todoist lane, which historically only recorded
+    successfully pushed rows.
+    """
+    with file_lock():
+        entries = load_all()
+        entry = TodoEntry(text=text, source=source)
+        entries.append(entry)
+        write_all(entries)
+    try:
+        task = gtasks.create_task(text, notes=f"source: {source}")
+        with file_lock():
+            entries = load_all()
+            for e in entries:
+                if e.id == entry.id:
+                    gtasks.stamp(e, task)
+            write_all(entries)
+        return True
+    except Exception as exc:  # noqa: BLE001 — a capture must survive a bad push
+        log(f"telegram task -> gtasks failed: {exc}; row queued for `todo sync`")
+        return False
+
+
 def _push_task(text: str, source: str = "telegram") -> bool:
-    """Create ONE Todoist task for a captured task, without touching Logseq.
+    """Create ONE task in the active backend, without touching Logseq.
 
     Pushes only this task (not a full `todo sync`, which would flush unrelated
-    pending rows), records it in the local store with the Todoist id stamped so
-    it is never re-pushed, and ensures the source label exists first. Swallows
-    every error — the vault file is the canonical record regardless.
+    pending rows), records it in the local store with the backend id stamped so
+    it is never re-pushed, and (Todoist) ensures the source label exists first.
+    Swallows every error — the vault file is the canonical record regardless.
     """
+    if config_task_backend() == "gtasks":
+        return _push_task_gtasks(text, source=source)
     try:
         tok = todoist.token()
         if not tok:
@@ -797,7 +864,7 @@ def _obsidian_deep_link(path: Path) -> str:
 
 def _reply(tok: str, chat_id, kind: str, locked: bool,
            path: Path | None = None) -> None:
-    msg = f"filed ✓ {kind}" + (" → Todoist" if kind == "task" else "")
+    msg = f"filed ✓ {kind}" + (f" → {_task_backend_name()}" if kind == "task" else "")
     if path is not None:
         msg += f"\n{_obsidian_deep_link(path)}"
     if not locked:

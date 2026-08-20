@@ -45,10 +45,22 @@ class TodoistSync(BaseModel):
     closed_ts: str | None = None
 
 
+class GtasksSync(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    task_id: str
+    list_id: str
+    url: str | None = None
+    ts: str
+    # Set once this row's completion has reached Google Tasks; same gating
+    # contract as TodoistSync.closed_ts.
+    closed_ts: str | None = None
+
+
 class SyncState(BaseModel):
     model_config = ConfigDict(extra="allow")
     logseq: LogseqSync | None = None
     todoist: TodoistSync | None = None
+    gtasks: GtasksSync | None = None
 
 
 class TodoEntry(BaseModel):
