@@ -321,6 +321,21 @@ def test_create_input_carries_deterministic_issue_id(fake):
     assert linear.sync([row], quiet=True) == 0
     assert fake.created[0]["id"] == linear.issue_uuid(row.id)
     assert fake.created[0]["id"] == linear.issue_uuid(row.id)  # deterministic
+    import uuid as _uuid
+    u = _uuid.UUID(fake.created[0]["id"])
+    assert u.version == 4 and u.variant == _uuid.RFC_4122   # Linear validates client ids as v4
+
+
+def test_graphql_error_includes_extensions_detail(monkeypatch):
+    class Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({"errors": [{"message": "Argument Validation Error", "extensions": {"userPresentableMessage": "id must be a UUID v4"}}]}).encode()
+    monkeypatch.setattr(linear.urllib.request, "urlopen", lambda req, timeout=0: Resp())
+    monkeypatch.setattr(linear.json, "load", lambda fh: json.loads(fh.read()))
+    with pytest.raises(linear.LinearError) as exc:
+        linear._graphql("mutation{ x }")
+    assert "id must be a UUID v4" in str(exc.value)
 
 
 def test_overlapping_create_adopts_by_id(monkeypatch):

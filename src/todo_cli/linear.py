@@ -117,8 +117,15 @@ def _graphql(query: str, variables: dict | None = None) -> dict:
     if not isinstance(payload, dict):
         raise LinearError("Linear returned a non-object response")
     if payload.get("errors"):
-        raise LinearError("Linear GraphQL error: " + "; ".join(
-            str(e.get("message", e)) for e in payload["errors"]))
+        parts = []
+        for e in payload["errors"]:
+            msg = str(e.get("message", e))
+            ext = e.get("extensions") or {}
+            detail = ext.get("userPresentableMessage") or ext.get("meta") or ext.get("type")
+            if detail:
+                msg += f" ({json.dumps(detail, default=str)[:200]})"
+            parts.append(msg)
+        raise LinearError("Linear GraphQL error: " + "; ".join(parts))
     return payload.get("data") or {}
 
 
@@ -220,7 +227,13 @@ def _due_date(due: str | None) -> str | None:
 
 
 def issue_uuid(capture_id: str) -> str:
-    return str(uuid.uuid5(CAPTURE_NAMESPACE, capture_id))
+    """Deterministic issue id for a capture, shaped as a UUID v4.
+
+    Linear validates client-supplied `IssueCreateInput.id` as a v4 UUID, so the
+    uuid5 digest is re-stamped with version 4 / RFC-4122 variant bits. Still a pure
+    function of the capture id, so retries and overlapping writers converge.
+    """
+    return str(uuid.UUID(bytes=uuid.uuid5(CAPTURE_NAMESPACE, capture_id).bytes, version=4))
 
 
 def _issue_by_id(issue_id: str) -> dict | None:
