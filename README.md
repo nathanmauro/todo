@@ -3,7 +3,7 @@
 Local-first capture CLI. Tasks live in `~/.todo/todos.jsonl` and push to **Linear** (since 2026-09-17; Todoist and Google Tasks are frozen read-only sources); notes/captures land in the **Obsidian vault** (the canonical store) as one Markdown file each. `done` here closes the Linear issue; the local file is the capture queue plus a frozen mirror of the migrated Todoist rows.
 
 > **Linear backend (2026-09-17).** `TODO_TASK_BACKEND` defaults to `linear`. Key: macOS login keychain
-> `security add-generic-password -a linear -s todo-cli -w '<personal API key>'` (or `TODO_LINEAR_API_KEY`).
+> `security add-generic-password -a linear -s todo-cli -w` and paste the key at the prompt (keeps it out of shell history), or `TODO_LINEAR_API_KEY` for one-off runs.
 > Team `TODO_LINEAR_TEAM=NAT`, default project `TODO_LINEAR_PROJECT=Personal`, label `capture`.
 > `todo add [--project <Linear name|repo alias>] [--dest inbox|current|idea] [--priority p1..p4] [--notes ...] [--id <stable id>]`.
 > Repo/area aliases: `src/todo_cli/linear_projects.json` (unknown projects stay queued with a routing error, never misfiled).

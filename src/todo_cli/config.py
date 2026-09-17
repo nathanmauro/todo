@@ -115,7 +115,7 @@ GTASKS_PRIMARY_LIST = os.environ.get("TODO_GTASKS_LIST", "Tasks")
 
 # --- Linear backend (2026-09-17 Todoist + Google Tasks -> Linear migration) --
 # Linear is the sole ongoing task destination. Personal API key lives in the login
-# keychain (`security add-generic-password -a linear -s todo-cli -w '<key>'`) or
+# keychain (`security add-generic-password -a linear -s todo-cli -w`, paste at the prompt) or
 # TODO_LINEAR_API_KEY. Without it every push fails closed (local row kept, retried).
 LINEAR_API = os.environ.get("TODO_LINEAR_API", "https://api.linear.app/graphql")
 LINEAR_TEAM_KEY = os.environ.get("TODO_LINEAR_TEAM", "NAT")

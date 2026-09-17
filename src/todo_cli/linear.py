@@ -4,7 +4,7 @@ Captures become Linear issues in team ``TODO_LINEAR_TEAM`` (default ``NAT``), pr
 ``TODO_LINEAR_PROJECT`` (default ``Personal``) unless a project/alias is given, carrying
 the ``capture`` label so the old Todoist "Inbox pile" survives as a label filter.
 Transport is the Linear GraphQL API with a personal API key from the login keychain
-(``security add-generic-password -a linear -s todo-cli -w '<key>'``) or
+(``security add-generic-password -a linear -s todo-cli -w`` — paste the key at the prompt) or
 ``TODO_LINEAR_API_KEY``.
 
 Contract:
@@ -60,7 +60,8 @@ DEST_MAP = {
 }
 KEY_HINT = (
     "no Linear API key: create one at linear.app → Settings → Security & access → "
-    "Personal API keys, then `security add-generic-password -a linear -s todo-cli -w '<key>'`"
+    "Personal API keys, then run `security add-generic-password -a linear -s todo-cli -w` "
+    "and paste the key at the prompt (never put the key on the command line)"
 )
 ALIASES_PATH = Path(os.environ.get("TODO_LINEAR_PROJECT_ALIASES", Path(__file__).with_name("linear_projects.json")))
 
