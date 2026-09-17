@@ -328,6 +328,9 @@ def test_logseq_complete_skips_unsynced(tmp_path):
 
 
 def test_cmd_done_propagates_both_ways(tmp_path, monkeypatch):
+
+
+    monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     mk = "<!-- todo:e2e -->"
     j = _journal(tmp_path, f"- TODO finish feature {mk}\n")
 

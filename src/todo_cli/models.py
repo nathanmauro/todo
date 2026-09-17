@@ -56,11 +56,23 @@ class GtasksSync(BaseModel):
     closed_ts: str | None = None
 
 
+class LinearSync(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    issue_id: str
+    identifier: str | None = None
+    url: str | None = None
+    ts: str
+    # Set once this row's completion has reached Linear; same gating contract as
+    # TodoistSync.closed_ts.
+    closed_ts: str | None = None
+
+
 class SyncState(BaseModel):
     model_config = ConfigDict(extra="allow")
     logseq: LogseqSync | None = None
     todoist: TodoistSync | None = None
     gtasks: GtasksSync | None = None
+    linear: LinearSync | None = None
 
 
 class TodoEntry(BaseModel):
@@ -80,6 +92,12 @@ class TodoEntry(BaseModel):
     # originated. The push channel never re-pushes a "todoist" row.
     origin: str | None = None
     mirrored_at: str | None = None
+    # Capture intent carried to the Linear backend: Todoist-style priority (p1..p4)
+    # and destination (inbox | current | idea) from cockpit-task-sync / cockpit-capture.
+    priority: str | None = None
+    dest: str | None = None
+    # Free-text body for the Linear issue (capture provenance, queue file, context).
+    notes: str | None = None
     # Dormant: kept only so old todos.jsonl rows (written by the retired Notion
     # Capture Inbox drain, 2026-06-01) still parse. Nothing reads or sets it now.
     notion_inbox_id: str | None = None

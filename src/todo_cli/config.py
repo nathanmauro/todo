@@ -113,8 +113,37 @@ GWS_BIN = os.environ.get("TODO_GWS_BIN", "gws")
 GTASKS_PRIMARY_LIST = os.environ.get("TODO_GTASKS_LIST", "Tasks")
 
 
+# --- Linear backend (2026-09-17 Todoist + Google Tasks -> Linear migration) --
+# Linear is the sole ongoing task destination. Personal API key lives in the login
+# keychain (`security add-generic-password -a linear -s todo-cli -w '<key>'`) or
+# TODO_LINEAR_API_KEY. Without it every push fails closed (local row kept, retried).
+LINEAR_API = os.environ.get("TODO_LINEAR_API", "https://api.linear.app/graphql")
+LINEAR_TEAM_KEY = os.environ.get("TODO_LINEAR_TEAM", "NAT")
+LINEAR_DEFAULT_PROJECT = os.environ.get("TODO_LINEAR_PROJECT", "Personal")
+LINEAR_CAPTURE_LABEL = os.environ.get("TODO_LINEAR_CAPTURE_LABEL", "capture")
+LINEAR_KEYCHAIN_ACCOUNT = "linear"
+
+
 def task_backend() -> str:
-    return os.environ.get("TODO_TASK_BACKEND", "todoist").strip().lower()
+    """Active outbound task backend: "linear" (default since 2026-09-17), "gtasks", or "todoist".
+
+    The legacy backends stay selectable by env for a one-off replay, but nothing
+    routes to them by default any more.
+    """
+    return os.environ.get("TODO_TASK_BACKEND", "linear").strip().lower()
+
+
+KNOWN_BACKENDS = ("linear", "gtasks", "todoist")
+
+
+def require_backend() -> str:
+    """The active backend, or a ValueError for an unknown value (never fall through to Todoist)."""
+    backend = task_backend()
+    if backend not in KNOWN_BACKENDS:
+        raise ValueError(
+            f"TODO_TASK_BACKEND={backend!r} is not a known backend {KNOWN_BACKENDS}; refusing to route tasks"
+        )
+    return backend
 
 # --- Logseq task sync (frozen archive; OFF by default) ----------------------
 # Logseq (~/Notes/logseq) became a FROZEN read-only archive on 2026-06-01. The

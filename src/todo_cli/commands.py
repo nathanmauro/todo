@@ -5,13 +5,15 @@ import argparse
 import contextlib
 import datetime as _dt
 import io
+import json
 import os
+import re
 import secrets as _secrets
 import subprocess
 import sys
 from pathlib import Path
 
-from . import backlog, config, gtasks, logseq, obsidian, plan, telegram, todoist, transcribe as _transcribe_mod
+from . import backlog, config, gtasks, linear, logseq, obsidian, plan, telegram, todoist, transcribe as _transcribe_mod
 from .config import (
     LOGSEQ_GRAPH,
     LOGSEQ_SYNC_ENABLED,
@@ -22,7 +24,7 @@ from .config import (
     mirror_policy,
 )
 from .formatting import human_ago, sync_badges
-from .models import TodoEntry, now_iso
+from .models import LinearSync, TodoEntry, now_iso
 from .storage import (
     append,
     ensure_store,
@@ -45,7 +47,16 @@ def _sync_outbound(entries: list[TodoEntry], *, quiet: bool = False) -> int:
     """Push eligible local-origin task state to Logseq and the task backend."""
     rc = 0
     rc |= _run_quiet(logseq.sync, entries, quiet=quiet)
-    if config.task_backend() == "gtasks":
+    try:
+        backend = config.require_backend()
+    except ValueError as exc:
+        log(str(exc))
+        if not quiet:
+            print(f"todo: {exc}", file=sys.stderr)
+        return 1
+    if backend == "linear":
+        rc |= _run_quiet(linear.sync, entries, quiet=quiet)
+    elif backend == "gtasks":
         rc |= _run_quiet(gtasks.sync, entries, quiet=quiet)
     else:
         rc |= _run_quiet(todoist.sync, entries, quiet=quiet)
@@ -55,7 +66,24 @@ def _sync_outbound(entries: list[TodoEntry], *, quiet: bool = False) -> int:
 def _refresh_task_state(
     entries: list[TodoEntry], *, dry_run: bool = False, quiet: bool = False
 ) -> int:
-    """Converge Todoist, local JSONL, and curated Logseq task blocks."""
+    """Converge the task backend, local JSONL, and curated Logseq task blocks.
+
+    Linear backend (2026-09-17): Todoist is a frozen read-only source, so the
+    Todoist mirror/reconcile legs are skipped entirely — refresh only drains the
+    local queue to Linear (creates + completions). Nothing is pulled back.
+    """
+    if config.task_backend() == "linear":
+        if dry_run:
+            print(
+                "refresh dry-run (linear): would create "
+                f"{len(linear.create_candidates(entries))} Linear issue(s), "
+                f"close {len(linear.completion_candidates(entries))} Linear issue(s); "
+                "Todoist mirror/reconcile skipped (frozen source)"
+            )
+            return 0
+        rc = _sync_outbound(entries, quiet=quiet)
+        write_all(entries)
+        return rc
     if dry_run:
         scratch = [e.model_copy(deep=True) for e in entries]
         rc = 0
@@ -114,11 +142,26 @@ def cmd_add(args: argparse.Namespace) -> int:
     text = " ".join(args.text).strip()
     if not text:
         sys.exit("empty todo")
-    entry = TodoEntry(
-        text=text, source=args.source, due=args.due, project=args.project
+    row_id = (getattr(args, "row_id", None) or "").strip()
+    if row_id and not re.fullmatch(r"[A-Za-z0-9._-]{8,64}", row_id):
+        sys.exit("todo add: --id must be 8-64 chars of [A-Za-z0-9._-]")
+    fields = dict(
+        text=text, source=args.source, due=args.due, project=args.project,
+        priority=getattr(args, "priority", None), dest=getattr(args, "dest", None),
+        notes=getattr(args, "notes", None),
     )
+    entry = TodoEntry(id=row_id, **fields) if row_id else TodoEntry(**fields)
     with file_lock():
-        append(entry)
+        if row_id:
+            existing = next((e for e in load_all() if e.id == row_id), None)
+            if existing is not None:
+                # Same queue identity delivered twice (checkpoint retry): keep the first row.
+                entry = existing
+                log(f"add: --id {row_id} already present; not appended (idempotent redelivery)")
+            else:
+                append(entry)
+        else:
+            append(entry)
     if not getattr(args, "no_sync", False):
         try:
             with file_lock():
@@ -131,9 +174,23 @@ def cmd_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def pending_delivery(entries: list[TodoEntry]) -> list[TodoEntry]:
+    """Open local-origin rows that have not reached Linear yet (the capture queue)."""
+    return linear.create_candidates(entries)
+
+
 def cmd_ls(args: argparse.Namespace) -> int:
     entries = load_all()
-    if args.filter == "open":
+    if config.task_backend() == "linear":
+        queued = len(pending_delivery(entries))
+        print(
+            "todo ls: local capture store — Linear is the board (linear.app/nathanmauro). "
+            f"{queued} row(s) pending delivery; legacy Todoist rows are a frozen 2026-09-17 mirror.",
+            file=sys.stderr,
+        )
+    if getattr(args, "filter", None) == "pending":
+        entries = pending_delivery(entries)
+    elif args.filter == "open":
         entries = [e for e in entries if e.status == "open"]
     elif args.filter == "done":
         entries = [e for e in entries if e.status == "done"]
@@ -166,10 +223,22 @@ def cmd_ls(args: argparse.Namespace) -> int:
 def cmd_backlog(args: argparse.Namespace) -> int:
     """Per-project pull: backlog / planned / in-flight across Obsidian + Todoist.
 
+    Retired under the Linear backend (2026-09-17): returns an empty, well-formed result
+    (JSON when `--json`) so dashboard callers degrade gracefully instead of reading the
+    frozen Todoist board.
+
     Defaults the project to the current directory name, so running it inside
     ~/Developer/proj/<name> just works. `--if-project` is the near-free guard
     for a global SessionStart hook (silent unless cwd is a known project label).
     """
+    if config.task_backend() == "linear":
+        note = "todo backlog: Todoist board retired 2026-09-17 — use Linear project views (linear.app/nathanmauro)"
+        project = getattr(args, "name", None) or getattr(args, "project", None)
+        if getattr(args, "json_output", False) or getattr(args, "json", False):
+            print(json.dumps({"project": project, "retired": True, "note": note, "backlog": [], "planned": [], "in_flight": [], "tasks": [], "plans": []}))
+        else:
+            print(note)
+        return 0
     name = (args.name or Path.cwd().name).strip()
     return backlog.run(
         name,
@@ -284,12 +353,80 @@ def cmd_done(args: argparse.Namespace) -> int:
         # Best-effort (push_completions swallows network errors); whatever
         # doesn't land is flushed by the next `todo sync`. Re-persist to
         # capture closed_ts.
-        closed, _ = todoist.push_completions([target])
+        try:
+            backend = config.require_backend()
+        except ValueError as exc:
+            print(f"done {target.short_id}  {target.text}  (local only: {exc})")
+            return 1
+        unlinked = False
+        if backend == "linear":
+            if target.sync.linear is None:
+                unlinked = True
+                closed = 0
+            else:
+                closed, _ = linear.push_completions([target])
+            where_name = "linear"
+        else:
+            closed, _ = todoist.push_completions([target])
+            where_name = "todoist"
         ls_flipped = logseq.complete([target])
         write_all(entries)
-    where = [w for w, hit in (("todoist", closed), ("logseq", ls_flipped)) if hit]
+    where = [w for w, hit in ((where_name, closed), ("logseq", ls_flipped)) if hit]
     suffix = f"  → {', '.join(where)}" if where else ""
+    if unlinked:
+        suffix += "  (no Linear issue linked — not closed in Linear; run `todo linear-adopt` for migrated rows)"
     print(f"done {target.short_id}  {target.text}{suffix}")
+    return 0
+
+
+def cmd_linear_adopt(args: argparse.Namespace) -> int:
+    """Stamp migrated local rows with their Linear issue from the migration map.
+
+    The 2026-09-17 migration created Linear issues for the Todoist corpus outside this
+    CLI; local rows mirrored from Todoist carry only `sync.todoist`. Adopting the
+    mapping (source-to-linear-map.json: `todoist:<id>` -> identifier/uuid/url) lets
+    `todo done` and the digest buttons close the right Linear issue. Local file only —
+    no network, no Todoist/Linear writes.
+    """
+    path = Path(args.map).expanduser()
+    try:
+        mapping = json.loads(path.read_text()).get("issues", {})
+    except (OSError, ValueError) as exc:
+        sys.exit(f"todo linear-adopt: cannot read map {path}: {exc}")
+    by_todoist = {k.split(":", 1)[1]: v for k, v in mapping.items() if k.startswith("todoist:")}
+    adopted = skipped = unmapped = stale_done = 0
+    with file_lock():
+        entries = load_all()
+        for e in entries:
+            if e.sync.linear is not None:
+                skipped += 1
+                continue
+            tid = e.sync.todoist.task_id if e.sync.todoist else None
+            hit = by_todoist.get(tid or "")
+            if not hit:
+                if e.status == "open" and e.origin == "todoist":
+                    unmapped += 1
+                continue
+            e.sync.linear = LinearSync(
+                issue_id=str(hit.get("uuid") or hit.get("identifier") or ""),
+                identifier=hit.get("identifier"), url=hit.get("url"), ts=now_iso(),
+                # Linear's state as migrated is authoritative. A row that is already `done`
+                # locally (a stale completion that never reached Todoist, or one Todoist later
+                # reopened) must NOT be replayed as a fresh completion by the next refresh, so
+                # it is adopted as already-reconciled (closed_ts set). Close it in Linear
+                # deliberately if that is really wanted.
+                closed_ts=now_iso() if e.status == "done" else None,
+            )
+            adopted += 1
+            if e.status == "done":
+                stale_done += 1
+        if not args.dry_run:
+            write_all(entries)
+    print(
+        f"linear-adopt{' (dry-run)' if args.dry_run else ''}: adopted {adopted} "
+        f"(of which {stale_done} locally-done rows marked already-reconciled, not replayed), "
+        f"already linked {skipped}, open mirrored rows without a mapping {unmapped}"
+    )
     return 0
 
 
@@ -318,13 +455,33 @@ def cmd_sync(args: argparse.Namespace) -> int:
         rc = 0
         if args.target in ("all", "logseq"):
             rc |= logseq.sync(entries)
-        if args.target in ("all", "todoist"):
+        try:
+            backend = config.require_backend()
+        except ValueError as exc:
+            print(f"todo sync: {exc}", file=sys.stderr)
+            return 2
+        if args.target in ("todoist", "gtasks", "linear") and args.target != backend:
+            print(
+                f"todo sync: --target {args.target} is retired under backend={backend}; nothing sent",
+                file=sys.stderr,
+            )
+            return 2
+        if args.target in ("all", "linear") and backend == "linear":
+            rc |= linear.sync(entries)
+        elif args.target in ("all", "gtasks") and backend == "gtasks":
+            rc |= gtasks.sync(entries)
+        elif args.target in ("all", "todoist") and backend == "todoist":
             rc |= todoist.sync(entries)
         write_all(entries)
     return rc
 
 
 def cmd_pull(args: argparse.Namespace) -> int:
+    if config.task_backend() == "linear":
+        # `pull` mirrors Todoist into the local store; with Linear as the backend
+        # Todoist is frozen, so there is nothing to pull and nothing to write.
+        print("todo pull: backend is linear — Todoist mirror skipped (frozen source)")
+        return 0
     if args.dry_run:
         return todoist.mirror(load_all(), dry_run=True)
     with file_lock():
@@ -348,7 +505,15 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         rc = 0
         if args.target in ("all", "logseq"):
             rc |= logseq.reconcile(entries)
-        if args.target in ("all", "todoist"):
+        try:
+            backend = config.require_backend()
+        except ValueError as exc:
+            print(f"todo reconcile: {exc}", file=sys.stderr)
+            return 2
+        if args.target == "todoist" and backend != "todoist":
+            print(f"todo reconcile: --target todoist is retired under backend={backend}; nothing sent", file=sys.stderr)
+            return 2
+        if args.target in ("all", "todoist") and backend == "todoist":
             rc |= todoist.reconcile(entries)
         write_all(entries)
     return rc

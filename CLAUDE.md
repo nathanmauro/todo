@@ -4,14 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`todo` is a local-first capture CLI (`todo_cli`). A single JSONL file at `~/.todo/todos.jsonl` is the local store; **Todoist is the canonical task layer** and the **Obsidian vault** (`~/Notes/obsidian`) is the canonical note/idea store. Task completion is **bidirectional and convergent**: finish a task anywhere — here, Todoist web/mobile, or (when enabled) Logseq — and the state converges everywhere without oscillating.
+`todo` is a local-first capture CLI (`todo_cli`). A single JSONL file at `~/.todo/todos.jsonl` is the local store; **Linear is the canonical task layer since 2026-09-17** (`linear.py`; Todoist and Google Tasks are frozen read-only sources and their legs below are legacy, selectable only by `TODO_TASK_BACKEND=todoist|gtasks`) and the **Obsidian vault** (`~/Notes/obsidian`) is the canonical note/idea store. Task completion is **bidirectional and convergent**: finish a task anywhere — here, Todoist web/mobile, or (when enabled) Logseq — and the state converges everywhere without oscillating.
 
 Three "surfaces" plus a mobile front door:
 - **Local JSONL** (`storage.py` + `models.py`) — the in-process source image; every command does `load_all → mutate → write_all`.
-- **Todoist** (`todoist.py`) — canonical tasks; outbound push (create + complete) and inbound mirror/reconcile.
+- **Linear** (`linear.py`) — canonical tasks: outbound create (idempotent: deterministic `uuid5(row id)` issue id + `capture-id:` footer, lookup-then-create, adopt on race) and complete; fail-closed without the keychain key; no inbound mirror (the local file is a delivery queue + frozen Todoist snapshot). Project aliases in `linear_projects.json`; unknown explicit projects raise `RoutingError` and stay queued.
+- **Todoist** (`todoist.py`) — legacy (retired 2026-09-17): outbound push and inbound mirror/reconcile, only under `TODO_TASK_BACKEND=todoist`.
 - **Obsidian** (`obsidian.py`) — one Markdown file per note/idea capture; the canonical memory store.
 - **Logseq** (`logseq.py`) — **frozen read-only archive since 2026-06-01**. Its journal-sync writers still exist but are **no-ops unless `TODO_LOGSEQ_SYNC=1`**.
-- **Telegram** (`telegram.py`) — the live mobile front door: a long-poll daemon files each message into Obsidian (and pushes tasks to Todoist).
+- **Telegram** (`telegram.py`) — the live mobile front door: a long-poll daemon files each message into Obsidian (and pushes `+t` tasks to Linear, holding the store lock across the push; `linear-complete` buttons close issues; `todoist-complete`/`gtasks-complete` are refused under the Linear backend).
 
 ## Commands
 

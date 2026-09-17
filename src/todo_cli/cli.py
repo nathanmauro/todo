@@ -7,11 +7,13 @@ archive — its task-sync writers are gated off behind TODO_LOGSEQ_SYNC.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 
 from .storage import LockTimeout
 
 from .commands import (
+    cmd_linear_adopt,
     cmd_add,
     cmd_audit,
     cmd_backlog,
@@ -40,11 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("text", nargs="+")
     a.add_argument("--due", help="ISO date YYYY-MM-DD")
     a.add_argument("--source", default="cli")
-    a.add_argument("--project", help="project tag (e.g. bin, todo, mcp-memory-agent)")
+    a.add_argument("--project", help="project tag / Linear project name (e.g. Cockpit, Personal)")
+    a.add_argument("--priority", choices=["p1", "p2", "p3", "p4"], help="Todoist-style priority (Linear: p1 urgent … p4 none)")
+    a.add_argument("--dest", choices=["inbox", "current", "idea"], help="inbox=Todo+capture label (default), current=In Progress, idea=Backlog+idea label")
+    a.add_argument("--notes", help="body text for the Linear issue (provenance, context); the title stays the task text")
+    a.add_argument("--id", dest="row_id", help="stable row id supplied by a queue (cockpit-task-drain); re-adding the same id is a no-op")
     a.add_argument(
         "--no-sync",
         action="store_true",
-        help="only write the local JSONL row; defer Todoist sync",
+        help="only write the local JSONL row; defer the backend sync",
     )
     a.set_defaults(func=cmd_add)
 
@@ -52,6 +58,8 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--all", dest="filter", action="store_const", const="all")
     ls.add_argument("--done", dest="filter", action="store_const", const="done")
     ls.add_argument("--open", dest="filter", action="store_const", const="open")
+    ls.add_argument("--pending", dest="filter", action="store_const", const="pending",
+                    help="rows captured locally but not yet delivered to Linear")
     ls.set_defaults(filter="open", func=cmd_ls)
 
     bk = sub.add_parser(
@@ -119,7 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="push pending tasks to Todoist (logseq target is frozen unless TODO_LOGSEQ_SYNC=1)",
     )
     s.add_argument(
-        "--target", choices=["all", "logseq", "todoist"], default="all"
+        "--target", choices=["all", "logseq", "linear", "todoist", "gtasks"], default="all",
+        help="all = the active backend (+ frozen logseq); a retired backend target is refused",
     )
     s.set_defaults(func=cmd_sync)
 
@@ -211,6 +220,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write an .srt subtitle file alongside each .md",
     )
     tr.set_defaults(func=cmd_transcribe)
+
+    la = sub.add_parser("linear-adopt", help="stamp migrated Todoist rows with their Linear issue (local file only)")
+    la.add_argument("--map", default=str(Path.home() / ".todo/exports/2026-09-17-linear-migration/source-to-linear-map.json"))
+    la.add_argument("--dry-run", action="store_true")
+    la.set_defaults(func=cmd_linear_adopt)
 
     audit = sub.add_parser("audit", help="summarize local sync state")
     audit.set_defaults(func=cmd_audit)

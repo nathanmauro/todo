@@ -174,6 +174,9 @@ def test_ls_shows_due_date(capsys):
 
 
 def test_telegram_push_task_holds_lock(monkeypatch):
+
+
+    monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     from todo_cli import telegram
 
     monkeypatch.setattr(telegram.todoist, "token", lambda: "tok")
@@ -198,6 +201,9 @@ def test_telegram_push_task_holds_lock(monkeypatch):
 
 
 def test_telegram_push_task_adopts_already_mirrored_row(monkeypatch):
+
+
+    monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     """If a refresh mirrored the just-created task while _push_task waited on
     the lock, the mirrored row is the record — no duplicate append."""
     from todo_cli import telegram

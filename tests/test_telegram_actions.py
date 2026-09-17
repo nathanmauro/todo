@@ -84,6 +84,9 @@ def test_send_rejects_unknown_verb_button(actions_env, monkeypatch):
 
 
 def test_callback_executes_add_task_once(actions_env, monkeypatch):
+
+
+    monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     pushed = []
     monkeypatch.setattr(telegram, "_push_task", lambda text, source="telegram": pushed.append(text) or True)
     action_id = telegram._new_action("add-task", "Buy milk", "Task")
@@ -165,6 +168,9 @@ def test_send_chunks_buttons_into_rows_of_three(actions_env, monkeypatch):
 
 
 def test_callback_completes_todo_once(actions_env, monkeypatch):
+
+
+    monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     from todo_cli.models import TodoEntry
     from todo_cli.storage import load_all, write_all
 

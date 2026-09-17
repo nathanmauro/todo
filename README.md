@@ -1,6 +1,19 @@
 # todo
 
-Local-first capture CLI. Tasks live in `~/.todo/todos.jsonl` and push to **Todoist**; notes/captures land in the **Obsidian vault** (the canonical store) as one Markdown file each. Task completion is bidirectional — finish a task anywhere and it converges everywhere: `done` here closes it there; `pull`/`reconcile` bring remote completions back here.
+Local-first capture CLI. Tasks live in `~/.todo/todos.jsonl` and push to **Linear** (since 2026-09-17; Todoist and Google Tasks are frozen read-only sources); notes/captures land in the **Obsidian vault** (the canonical store) as one Markdown file each. `done` here closes the Linear issue; the local file is the capture queue plus a frozen mirror of the migrated Todoist rows.
+
+> **Linear backend (2026-09-17).** `TODO_TASK_BACKEND` defaults to `linear`. Key: macOS login keychain
+> `security add-generic-password -a linear -s todo-cli -w '<personal API key>'` (or `TODO_LINEAR_API_KEY`).
+> Team `TODO_LINEAR_TEAM=NAT`, default project `TODO_LINEAR_PROJECT=Personal`, label `capture`.
+> `todo add [--project <Linear name|repo alias>] [--dest inbox|current|idea] [--priority p1..p4] [--notes ...] [--id <stable id>]`.
+> Repo/area aliases: `src/todo_cli/linear_projects.json` (unknown projects stay queued with a routing error, never misfiled).
+> Every push is idempotent (deterministic issue id = uuid5(row id) + `capture-id:` footer) and fail-closed:
+> without a key the row waits locally and `todo refresh` (launchd, 10 min) delivers it later. Under the
+> Linear backend `pull`/`reconcile --target todoist` and the `todoist`/`gtasks` sync targets are refused,
+> `todo backlog` is retired (use Linear project views), and `todo ls --pending` shows undelivered rows.
+> `todo linear-adopt` stamps the migrated Todoist rows with their Linear issue from the private migration map
+> (locally-done rows are marked already-reconciled and never replayed). The Todoist/Google Tasks sections
+> below describe the retired backends, selectable only via `TODO_TASK_BACKEND=todoist|gtasks` for a replay.
 
 > **Logseq is a frozen archive** (2026-06-01). The Logseq task-sync writers are kept but gated **off** behind `TODO_LOGSEQ_SYNC=1`; by default the CLI never writes to the Logseq graph. The mobile front door is the Telegram bot → Obsidian (`todo telegram-poll --loop`).
 
@@ -17,7 +30,7 @@ Edits to `src/todo_cli/cli.py` apply immediately via the `todo` shim in `~/.loca
 ```
 todo add "text" [--due YYYY-MM-DD] [--source ...] [--project ...] [--no-sync]
 todo ls   [--all|--open|--done]
-todo done <id-prefix>          # closes it in Todoist (+ flips its Logseq line to DONE only if TODO_LOGSEQ_SYNC=1)
+todo done <id-prefix>          # closes the Linear issue (legacy backend: Todoist) (+ Logseq only if TODO_LOGSEQ_SYNC=1)
 todo rm   <id-prefix>
 todo edit
 todo note "text"               # capture a note into the Obsidian vault (captures/YYYY-MM-DD/)
@@ -26,7 +39,7 @@ todo plan create --id <slug> --title "title" --project <project> --summary "one-
 todo plan execute <slug> --summary "what shipped"
 todo plan status <slug>
 todo backlog [project] [--offline] [--json] [--history]
-todo sync       [--target all|logseq|todoist]
+todo sync       [--target all|logseq|linear|todoist|gtasks]   # all = active backend; retired targets refused
 todo refresh    [--dry-run]
 todo audit
 todo reconcile  [--target all|logseq|todoist]

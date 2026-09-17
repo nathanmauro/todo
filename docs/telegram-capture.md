@@ -17,7 +17,7 @@ of disappearing.
 
 Prefixes route the capture:
 
-- `+t ` / `+task ` → **task** (written as a `- [ ]` checkbox **and** pushed to Todoist)
+- `+t ` / `+task ` → **task** (written as a `- [ ]` checkbox **and** pushed to Linear; the reply says "push queued" when the Linear key is missing or the API is down — the row waits in `~/.todo/todos.jsonl`)
 - `+i ` / `+idea ` → **idea**
 - anything else → **note**
 
@@ -67,7 +67,7 @@ behind NAT. Official Bot API, zero ban risk.
 2. For each authorized message: extract text when present (voice/audio may be
    transcribed), download every Telegram `file_id` payload best-effort, classify
    by prefix when text exists, and write one capture file. Messages without text
-   still write a structured metadata note; tasks also push a single Todoist
+   still write a structured metadata note; tasks also push a single Linear
    task. Persist the sender `chat_id`, reply `filed ✓`, and advance the offset
    cursor past the handled update.
 

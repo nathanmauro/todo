@@ -79,6 +79,9 @@ def test_add_no_sync_defers_outbound(monkeypatch):
 
 
 def test_refresh_order_and_write_boundaries(monkeypatch):
+
+
+    monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     write_all([TodoEntry(text="x")])
     calls = []
 
