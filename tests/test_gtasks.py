@@ -105,14 +105,18 @@ def test_push_task_gtasks_fail_closed(monkeypatch, gtasks_backend):
     assert entries[0].sync.gtasks.task_id == "G1"
 
 
-def test_push_task_default_backend_still_todoist(monkeypatch):
-    """Without the env flip, +t keeps using the Todoist lane."""
+def test_push_task_default_backend_is_linear_not_gtasks(monkeypatch):
+    """Without the env flip (default = linear since 2026-09-17), +t never uses the Google lane."""
     monkeypatch.delenv("TODO_TASK_BACKEND", raising=False)
     gt = _mock_create(monkeypatch)
-    from todo_cli import todoist
-    monkeypatch.setattr(todoist, "token", lambda: None)  # short-circuits lane
-    assert telegram._push_task("still todoist") is False
-    assert gt.call_count == 0
+    from todo_cli import linear, todoist
+    monkeypatch.setattr(linear, "token", lambda: None)   # no key -> fail closed, row queued
+    td = MagicMock()
+    monkeypatch.setattr(todoist, "create_task", td)
+    assert telegram._push_task("default lane") is False
+    assert gt.call_count == 0 and td.call_count == 0
+    [row] = load_all()
+    assert row.text == "default lane" and row.sync.gtasks is None and row.sync.todoist is None
 
 
 def test_backend_name(monkeypatch, gtasks_backend):
