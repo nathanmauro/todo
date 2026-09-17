@@ -381,13 +381,13 @@ def test_legacy_complete_verbs_refused_under_linear(monkeypatch, fake):
 
 def test_linear_adopt_stamps_migrated_rows(tmp_path, fake, capsys):
     mirrored = TodoEntry(text="migrated", origin="todoist")
-    mirrored.sync.todoist = TodoistSync(task_id="6gxQWv4F4rCmrwf8", ts="x")
+    mirrored.sync.todoist = TodoistSync(task_id="6TESTFINANCE0001", ts="x")
     orphan = TodoEntry(text="unmapped", origin="todoist")
     orphan.sync.todoist = TodoistSync(task_id="nomap", ts="x")
     local = TodoEntry(text="local capture")
     write_all([mirrored, orphan, local])
     m = tmp_path / "map.json"
-    m.write_text(json.dumps({"issues": {"todoist:6gxQWv4F4rCmrwf8": {"identifier": "NAT-99", "uuid": "9765-uuid", "url": "https://linear.app/x/NAT-99"}}}))
+    m.write_text(json.dumps({"issues": {"todoist:6TESTFINANCE0001": {"identifier": "NAT-99", "uuid": "9765-uuid", "url": "https://linear.app/x/NAT-99"}}}))
     assert commands.cmd_linear_adopt(argparse.Namespace(map=str(m), dry_run=True)) == 0
     assert load_all()[0].sync.linear is None  # dry-run wrote nothing
     assert commands.cmd_linear_adopt(argparse.Namespace(map=str(m), dry_run=False)) == 0
@@ -441,10 +441,10 @@ def test_add_with_stable_id_is_idempotent(fake):
 def test_linear_adopt_never_replays_stale_local_completion(tmp_path, fake):
     """A row done locally (June) whose Linear issue is deliberately Todo must not be closed by adoption+refresh."""
     stale = TodoEntry(text="Rework /jaws", origin="todoist", status="done", done_ts="2026-06-10T00:00:00", done_source="local")
-    stale.sync.todoist = TodoistSync(task_id="6gpJvPjGFhf2J5cg", ts="x")
+    stale.sync.todoist = TodoistSync(task_id="6TESTJAWS0000001", ts="x")
     write_all([stale])
     m = tmp_path / "map.json"
-    m.write_text(json.dumps({"issues": {"todoist:6gpJvPjGFhf2J5cg": {"identifier": "NAT-85", "uuid": "nat85-uuid", "url": "u"}}}))
+    m.write_text(json.dumps({"issues": {"todoist:6TESTJAWS0000001": {"identifier": "NAT-85", "uuid": "nat85-uuid", "url": "u"}}}))
     assert commands.cmd_linear_adopt(argparse.Namespace(map=str(m), dry_run=False)) == 0
     [row] = load_all()
     assert row.sync.linear.identifier == "NAT-85" and row.sync.linear.closed_ts  # already reconciled
