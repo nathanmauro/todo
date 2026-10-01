@@ -1,4 +1,9 @@
-"""Audio transcription helpers: ffmpeg re-encode + whisper.cpp inference.
+"""Audio transcription helpers: ffmpeg re-encode + Parakeet / whisper.cpp inference.
+
+Engine: Parakeet TDT v3 (parakeet-mlx) when installed, else whisper.cpp. If
+Parakeet fails or returns nothing, the same audio falls back to whisper.cpp.
+An explicit whisper model (``model=`` / ``todo transcribe --model``) forces
+whisper.cpp.
 
 Shared by the Telegram voice-note pipeline (telegram.py) and the CLI
 `todo transcribe` verb (commands.py). The Telegram path is a pure refactor —
@@ -15,11 +20,14 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .config import OBSIDIAN_VAULT, WHISPER_BIN, WHISPER_MODEL
+from .config import OBSIDIAN_VAULT, PARAKEET_BIN, WHISPER_BIN, WHISPER_MODEL
 from .storage import log
 
 # Default model (may be overridden per call)
 _DEFAULT_MODEL = WHISPER_MODEL
+
+# parakeet-mlx executable; "" disables the Parakeet engine
+_PARAKEET_BIN = PARAKEET_BIN
 
 # The small.en model path — auto-selected for long recordings when present
 _SMALL_MODEL = str(Path.home() / ".cache" / "whisper" / "ggml-small.en.bin")
@@ -70,6 +78,40 @@ def select_model(audio: Path, model_override: str | None = None) -> str:
     return _DEFAULT_MODEL or ""
 
 
+def engine_available() -> bool:
+    """True when at least one transcription engine is configured."""
+    return bool(_PARAKEET_BIN) or bool(_DEFAULT_MODEL)
+
+
+def _run_parakeet(wav: Path, srt_dest: Path | None) -> str | None:
+    """Transcribe a 16 kHz WAV with parakeet-mlx. None on failure or empty text."""
+    with tempfile.TemporaryDirectory(prefix="todo-parakeet-") as out:
+        out_dir = Path(out)
+        cmd = [
+            _PARAKEET_BIN,
+            "--output-format", "all" if srt_dest is not None else "txt",
+            "--output-dir", str(out_dir),
+            str(wav),
+        ]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+            log(f"transcribe: parakeet failed, falling back to whisper: {exc}")
+            return None
+        txt = out_dir / f"{wav.stem}.txt"
+        text = " ".join(txt.read_text().split()).strip() if txt.exists() else ""
+        if not text:
+            log(f"transcribe: parakeet returned no text for {wav.name}, falling back to whisper")
+            return None
+        if srt_dest is not None:
+            srt = out_dir / f"{wav.stem}.srt"
+            if srt.exists():
+                srt.replace(srt_dest)
+            else:
+                log(f"transcribe: srt requested but parakeet produced no .srt for {wav.name}")
+        return text
+
+
 def transcribe(
     audio: Path,
     *,
@@ -80,17 +122,18 @@ def transcribe(
 
     Args:
         audio:     Input audio (any format ffmpeg supports, including m4a/ogg).
-        model:     Explicit model path. None = auto-select via select_model().
+        model:     Explicit whisper model path; forces whisper.cpp. None =
+                   Parakeet when installed, else select_model().
         srt_dest:  If given, write a .srt file to this exact path after
                    transcription. whisper-cli's -osrt flag is used; it writes
                    to the same stem as -of, so we use a temp stem and rename.
 
     Returns:
         Plain-text transcript string, or None if transcription is not
-        configured (no model) or fails.
+        configured (no engine) or fails.
     """
-    resolved_model = select_model(audio, model)
-    if not resolved_model:
+    use_parakeet = bool(_PARAKEET_BIN) and not model
+    if not use_parakeet and not select_model(audio, model):
         return None
 
     # Re-encode to 16 kHz mono WAV in a temp file (whisper expects WAV)
@@ -111,6 +154,14 @@ def transcribe(
             ],
             capture_output=True, check=True,
         )
+
+        if use_parakeet:
+            text = _run_parakeet(wav, srt_dest)
+            if text:
+                return text
+        resolved_model = select_model(audio, model)
+        if not resolved_model:
+            return None
 
         cmd = [
             WHISPER_BIN, "-m", resolved_model,

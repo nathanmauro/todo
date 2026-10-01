@@ -31,6 +31,14 @@ def _no_live_linear(monkeypatch):
     monkeypatch.setattr(linear.urllib.request, "urlopen", _blocked)
 
 
+@pytest.fixture(autouse=True)
+def _no_parakeet(monkeypatch):
+    """Default every test to the whisper.cpp engine; Parakeet tests opt in."""
+    from todo_cli import transcribe
+
+    monkeypatch.setattr(transcribe, "_PARAKEET_BIN", "", raising=False)
+
+
 @pytest.fixture
 def store(tmp_path):
     return tmp_path / "todos.jsonl"

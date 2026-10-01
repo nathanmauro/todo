@@ -361,3 +361,124 @@ def test_cmd_transcribe_srt_flag(tmp_path, vault, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "srt" in out.lower() or any(dest.glob("*.srt"))
+
+
+# ---------------------------------------------------------------------------
+# Parakeet engine (preferred when installed; whisper.cpp is the fallback)
+# ---------------------------------------------------------------------------
+
+def _parakeet_run(text="parakeet  words\nhere", srt=None, fail=False, whisper_text="whisper words"):
+    """subprocess.run fake: ffmpeg ok, parakeet writes <stem>.txt (+ .srt), whisper prints text."""
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "ffmpeg":
+            return MagicMock(returncode=0, stdout="")
+        if cmd[0] == "/bin/parakeet-mlx":
+            if fail:
+                raise subprocess.CalledProcessError(1, cmd)
+            out = Path(cmd[cmd.index("--output-dir") + 1])
+            stem = Path(cmd[-1]).stem
+            if text is not None:
+                (out / f"{stem}.txt").write_text(text)
+            if srt is not None:
+                (out / f"{stem}.srt").write_text(srt)
+            return MagicMock(returncode=0, stdout="")
+        return MagicMock(returncode=0, stdout=whisper_text)
+
+    return fake_run, calls
+
+
+def test_transcribe_prefers_parakeet(tmp_path, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.ogg")
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    monkeypatch.setattr(tr, "_DEFAULT_MODEL", "/base.bin")
+    fake_run, calls = _parakeet_run()
+    with patch("subprocess.run", side_effect=fake_run):
+        result = tr.transcribe(audio)
+    assert result == "parakeet words here"
+    assert [c[0] for c in calls] == ["ffmpeg", "/bin/parakeet-mlx"]
+    assert calls[1][calls[1].index("--output-format") + 1] == "txt"
+
+
+def test_transcribe_parakeet_works_without_whisper_model(tmp_path, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.ogg")
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    monkeypatch.setattr(tr, "_DEFAULT_MODEL", "")
+    fake_run, _ = _parakeet_run()
+    with patch("subprocess.run", side_effect=fake_run):
+        assert tr.transcribe(audio) == "parakeet words here"
+
+
+def test_transcribe_falls_back_to_whisper_when_parakeet_fails(tmp_path, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.ogg")
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    monkeypatch.setattr(tr, "_DEFAULT_MODEL", "/base.bin")
+    fake_run, calls = _parakeet_run(fail=True)
+    with patch("subprocess.run", side_effect=fake_run):
+        with patch.object(tr, "audio_duration", return_value=30.0):
+            result = tr.transcribe(audio)
+    assert result == "whisper words"
+    assert calls[-1][0] == tr.WHISPER_BIN
+
+
+def test_transcribe_falls_back_to_whisper_when_parakeet_empty(tmp_path, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.ogg")
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    monkeypatch.setattr(tr, "_DEFAULT_MODEL", "/base.bin")
+    fake_run, calls = _parakeet_run(text="   \n")
+    with patch("subprocess.run", side_effect=fake_run):
+        with patch.object(tr, "audio_duration", return_value=30.0):
+            assert tr.transcribe(audio) == "whisper words"
+
+
+def test_transcribe_parakeet_failure_without_whisper_returns_none(tmp_path, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.ogg")
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    monkeypatch.setattr(tr, "_DEFAULT_MODEL", "")
+    fake_run, _ = _parakeet_run(fail=True)
+    with patch("subprocess.run", side_effect=fake_run):
+        assert tr.transcribe(audio) is None
+
+
+def test_transcribe_explicit_model_forces_whisper(tmp_path, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.ogg")
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    fake_run, calls = _parakeet_run()
+    with patch("subprocess.run", side_effect=fake_run):
+        result = tr.transcribe(audio, model="/custom/model.bin")
+    assert result == "whisper words"
+    assert "/bin/parakeet-mlx" not in [c[0] for c in calls]
+
+
+def test_transcribe_parakeet_writes_srt(tmp_path, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.ogg")
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    srt_dest = tmp_path / "out.srt"
+    fake_run, calls = _parakeet_run(text="hello", srt="1\n00:00:00,000 --> 00:00:01,000\nhello\n")
+    with patch("subprocess.run", side_effect=fake_run):
+        assert tr.transcribe(audio, srt_dest=srt_dest) == "hello"
+    assert "hello" in srt_dest.read_text()
+    assert calls[1][calls[1].index("--output-format") + 1] == "all"
+
+
+def test_engine_available(monkeypatch):
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "")
+    monkeypatch.setattr(tr, "_DEFAULT_MODEL", "")
+    assert not tr.engine_available()
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    assert tr.engine_available()
+
+
+def test_cmd_transcribe_uses_parakeet_without_whisper_model(tmp_path, vault, monkeypatch):
+    audio = _make_audio(tmp_path, "voice.m4a")
+    dest = tmp_path / "out"
+    monkeypatch.setattr(tr, "_PARAKEET_BIN", "/bin/parakeet-mlx")
+    monkeypatch.setattr(tr, "_DEFAULT_MODEL", "")
+    fake_run, calls = _parakeet_run(text="from parakeet")
+    args = argparse.Namespace(files=[str(audio)], dest=str(dest), model=None, srt=False)
+    with patch("subprocess.run", side_effect=fake_run):
+        rc = commands.cmd_transcribe(args)
+    assert rc == 0
+    assert "from parakeet" in next(dest.glob("*.md")).read_text()

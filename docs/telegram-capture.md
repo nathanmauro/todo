@@ -49,14 +49,19 @@ behind NAT. Official Bot API, zero ban risk.
    `~/Library/LaunchAgents/com.nathan.telegram-capture.plist`, then
    `launchctl kickstart -k gui/$(id -u)/com.nathan.telegram-capture`. A non-empty
    allow-list silently drops messages from any other chat.
-5. **Voice (optional).** Transcription uses whisper.cpp locally:
+5. **Voice (optional).** Transcription is local. Parakeet TDT v3 (`parakeet-mlx`)
+   is preferred when installed: it's more accurate than whisper base.en and adds
+   punctuation. whisper.cpp is the fallback whenever Parakeet is missing, fails,
+   or returns no text:
    ```bash
-   brew install whisper-cpp
+   uv tool install parakeet-mlx          # preferred; model downloads on first use
+   brew install whisper-cpp              # fallback
    mkdir -p ~/.cache/whisper && curl -SL -o ~/.cache/whisper/ggml-base.en.bin \
      https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
    ```
-   The CLI auto-detects that model path. Override with `TODO_WHISPER_MODEL`, or
-   set it to `""` to disable voice (text still works). `ffmpeg` is required.
+   Both are auto-detected (`~/.local/bin/parakeet-mlx`, `~/.cache/whisper/ggml-base.en.bin`).
+   Override with `TODO_PARAKEET_BIN` / `TODO_WHISPER_MODEL`, or set either to `""` to
+   disable that engine (text still works with neither). `ffmpeg` is required.
 
 ## How it runs
 
@@ -86,6 +91,7 @@ it must keep. (See the vault's `06 Backlog/llm-classifier-for-telegram-captures`
 
 - `TODO_TELEGRAM=0` — disable the Telegram lane entirely.
 - `TODO_OBSIDIAN_VAULT` — vault root for captures (default `~/Notes/obsidian`).
-- `TODO_WHISPER_MODEL` — ggml model path (`""` disables voice).
+- `TODO_PARAKEET_BIN` — parakeet-mlx path, the preferred engine (`""` disables it).
+- `TODO_WHISPER_MODEL` — ggml model path for the whisper.cpp fallback (`""` disables it).
 - `TELEGRAM_BOT_TOKEN` — token override (else keychain `telegram`/`todo-cli`).
 - `TELEGRAM_ALLOWED_CHAT_ID` — comma-separated chat-id allow-list (single-user lock).

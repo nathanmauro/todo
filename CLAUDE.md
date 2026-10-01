@@ -44,7 +44,7 @@ cli.py            argparse → binds each subcommand to a cmd_* via set_defaults
        ├ todoist.py     Todoist API v1 leg (HTTP via stdlib urllib).
        ├ logseq.py      Logseq journal leg (pure filesystem; gated off).
        ├ obsidian.py    Obsidian capture writer (pure filesystem).
-       ├ telegram.py    Telegram capture daemon (HTTP + ffmpeg/whisper subprocess).
+       ├ telegram.py    Telegram capture daemon (HTTP + ffmpeg/Parakeet subprocess; whisper.cpp fallback).
        └ formatting.py  display helpers for `todo ls` ONLY (audit/doctor print inline).
   config.py  / models.py   (leaves: env/paths/constants ; pydantic schema)
 ```
@@ -109,6 +109,6 @@ One file per capture: `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md`, 
 - **macOS login keychain**, service `todo-cli`: account `todoist` (Todoist token) and account `telegram` (bot token). Both env-overridable (`TODOIST_TOKEN`, `TELEGRAM_BOT_TOKEN`).
 - **`~/Developer/proj/cockpit/todoist-structure.json`** — canonical Todoist IDs + mirror scope (see above).
 - **Obsidian vault** `~/Notes/obsidian` (captures); **Logseq graph** `~/Notes/logseq` (frozen).
-- **`ffmpeg` + `whisper.cpp`** for voice transcription; **launchd** agent `com.nathan.telegram-capture` for the daemon.
+- **`ffmpeg` + `parakeet-mlx`** (preferred) / **`whisper.cpp`** (fallback) for voice transcription, see `transcribe.py`; **launchd** agent `com.nathan.telegram-capture` for the daemon.
 - **launchd** agent `com.nathan.todo-refresh` (`launchd/com.nathan.todo-refresh.plist` in this repo, installed to `~/Library/LaunchAgents/`) runs `todo refresh` every 10 min + at login — the standing Todoist⇄local convergence loop. Mirrored rows import with Todoist's `added_at` as `ts`, re-derive `project`/`source` from labels on every pull, and render in `ls` with a `[mirror]` badge and `[due …]`.
 - `docs/telegram-capture.md` documents the live mobile lane. `docs/android-capture.md` is **superseded historical reference** (the old Notion→Logseq flow, retired 2026-06-01) — don't act on it.

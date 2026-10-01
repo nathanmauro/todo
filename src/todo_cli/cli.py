@@ -212,7 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--model",
         metavar="NAME",
         default=None,
-        help="whisper model path (default: auto-select based on duration)",
+        help="whisper model path; forces whisper.cpp (default: Parakeet when installed, else whisper auto-select)",
     )
     tr.add_argument(
         "--srt",

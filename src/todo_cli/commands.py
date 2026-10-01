@@ -654,12 +654,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def cmd_transcribe(args: argparse.Namespace) -> int:
     """Transcribe audio files to Markdown captures in the Obsidian vault.
 
-    Runs ffmpeg + whisper.cpp over each FILE and writes one capture per input
-    under --dest (default: captures/YYYY-MM-DD/ in the vault). Uses the audio
-    file's mtime for the 'created' frontmatter field. Auto-selects ggml-small.en
-    for recordings longer than 10 minutes when the model is present; use --model
-    to override. --srt additionally writes a .srt file alongside each .md when
-    whisper-cli supports it.
+    Runs ffmpeg + Parakeet (whisper.cpp fallback) over each FILE and writes one
+    capture per input under --dest (default: captures/YYYY-MM-DD/ in the vault).
+    Uses the audio file's mtime for the 'created' frontmatter field. --model
+    forces whisper.cpp with that model; on the whisper path ggml-small.en is
+    auto-selected for recordings longer than 10 minutes when present. --srt
+    additionally writes a .srt file alongside each .md.
     """
     files = [Path(f) for f in args.files]
     dest = Path(args.dest) if args.dest else _transcribe_mod.default_dest()
@@ -673,11 +673,11 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
             rc = 1
             continue
 
-        chosen_model = _transcribe_mod.select_model(audio, model_override)
-        if not chosen_model:
+        if not model_override and not _transcribe_mod.engine_available():
             print(
-                f"transcribe: no whisper model configured — set TODO_WHISPER_MODEL "
-                f"or place ggml-base.en.bin at ~/.cache/whisper/",
+                "transcribe: no engine configured — install parakeet-mlx "
+                "(uv tool install parakeet-mlx), set TODO_WHISPER_MODEL, "
+                "or place ggml-base.en.bin at ~/.cache/whisper/",
                 file=sys.stderr,
             )
             return 1
@@ -693,7 +693,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
 
         text = _transcribe_mod.transcribe(
             audio,
-            model=chosen_model,
+            model=model_override,
             srt_dest=srt_path,
         )
         if text is None:
@@ -719,7 +719,7 @@ def cmd_transcribe(args: argparse.Namespace) -> int:
         if srt_path and srt_path.exists():
             msg += f"  srt → {srt_path}"
         elif want_srt and srt_path and not srt_path.exists():
-            msg += "  (srt: whisper produced no output for this file)"
+            msg += "  (srt: no subtitle output for this file)"
         print(msg)
 
     return rc

@@ -199,3 +199,10 @@ _WHISPER_DEFAULT = HOME / ".cache" / "whisper" / "ggml-base.en.bin"
 WHISPER_MODEL = os.environ.get(
     "TODO_WHISPER_MODEL", str(_WHISPER_DEFAULT) if _WHISPER_DEFAULT.exists() else ""
 )
+# Parakeet TDT v3 via parakeet-mlx (`uv tool install parakeet-mlx`): preferred
+# engine when installed — more accurate and faster than whisper base.en on Apple
+# Silicon. whisper.cpp stays the fallback. "" disables Parakeet.
+_PARAKEET_DEFAULT = HOME / ".local" / "bin" / "parakeet-mlx"
+PARAKEET_BIN = os.environ.get(
+    "TODO_PARAKEET_BIN", str(_PARAKEET_DEFAULT) if _PARAKEET_DEFAULT.exists() else ""
+)
