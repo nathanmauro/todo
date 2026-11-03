@@ -65,6 +65,9 @@ _MAX_BUTTONS = 25
 _BUTTON_LABEL_LIMIT = 75
 _SEEN_EVENT_LIMIT = 500
 _ACTION_ID_PREFIX = "todo_action"
+# Slack slash command -> agent-bridge grammar. Prefixed so they cannot collide
+# with another app's /claude in the workspace.
+SLASH_TO_BRIDGE = {"/cc": "/claude", "/cc-sessions": "/sessions", "/cc-kill": "/kill"}
 
 
 # --- credentials -------------------------------------------------------------
@@ -602,13 +605,14 @@ def handle_slash_command(payload: dict) -> str:
     if not _authorized(user_id):
         log(f"slack: refused {command} from unauthorized user {user_id}")
         return "not authorized"
-    if command not in core._agent_prefixes():
+    bridge_command = SLASH_TO_BRIDGE.get(command, command)
+    if bridge_command not in core._agent_prefixes():
         return f"unknown command {command}"
     bridge = os.environ.get("TODO_AGENT_BRIDGE_CMD", "")
     if not bridge:
         return "agent bridge not configured (set TODO_AGENT_BRIDGE_CMD)"
 
-    text = f"{command} {payload.get('text') or ''}".strip()
+    text = f"{bridge_command} {payload.get('text') or ''}".strip()
     args = [bridge, "--chat-id", str(payload.get("channel_id") or ""), "--text", text]
     try:
         subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

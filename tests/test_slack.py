@@ -224,7 +224,7 @@ def test_slash_command_requires_lock_and_fires_bridge(env, monkeypatch):
     monkeypatch.setenv("TODO_AGENT_BRIDGE_CMD", "/bin/bridge")
     monkeypatch.setattr(slack.subprocess, "Popen", lambda args, **kw: fired.append(args))
     payload = {
-        "command": "/claude",
+        "command": "/cc",
         "text": "@cockpit fix it",
         "user_id": "UNATHAN",
         "channel_id": "CAGENTS",

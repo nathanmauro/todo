@@ -3,8 +3,8 @@
 # then store the two tokens (never commit them):
 #   security add-generic-password -a slack-bot -s todo-cli -w '<xoxb-…>'
 #   security add-generic-password -a slack-app -s todo-cli -w '<xapp-…>'   # scope connections:write
-# Slash commands may collide with another installed app's /claude; rename here
-# and in TODO_AGENT_PREFIXES together if so.
+# Slash commands are prefixed /cc* so they never collide with a Claude app's /claude;
+# slack.SLASH_TO_BRIDGE maps them onto the bridge grammar.
 display_information:
   name: Cockpit
   description: Capture into Obsidian/Linear and agent notifications for Nathan.
@@ -16,12 +16,12 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   slash_commands:
-    - command: /claude
+    - command: /cc
       description: Fire a remote Claude session (/claude @project task)
       usage_hint: "@project task"
-    - command: /sessions
+    - command: /cc-sessions
       description: List bridge-tracked agent sessions
-    - command: /kill
+    - command: /cc-kill
       description: Kill a bridge-tracked agent session
       usage_hint: "<local-id>"
 oauth_config:

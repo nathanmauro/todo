@@ -16,7 +16,7 @@ Telegram lane until it is retired.
 - Buttons — `todo notify --button Label=verb[:payload]` registers the same action
   records under `~/.todo/telegram-actions/` that Job Scout reads; a click executes
   once and collapses the buttons. `agent-*` verbs need `SLACK_ALLOWED_USER_ID`.
-- Slash commands — `/claude`, `/sessions`, `/kill` go to `TODO_AGENT_BRIDGE_CMD`
+- Slash commands — `/cc`, `/cc-sessions`, `/cc-kill` (mapped to the bridge's `/claude`, `/sessions`, `/kill`) go to `TODO_AGENT_BRIDGE_CMD`
   (Cockpit's `cockpit-remote-fire`) with the channel id as `--chat-id`.
 - `todo notify [--route R] [--button …] [--thread TS] text` — the transport-neutral
   sender. `TODO_NOTIFY_TRANSPORT=telegram|slack|both` picks the wire (default
