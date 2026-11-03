@@ -33,6 +33,9 @@ oauth_config:
       - im:history
       - files:read
       - commands
+      - channels:read
+      - channels:manage
+      - users:read
 settings:
   event_subscriptions:
     bot_events:
