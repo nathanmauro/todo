@@ -28,6 +28,9 @@ from .commands import (
     cmd_reconcile,
     cmd_rm,
     cmd_sync,
+    cmd_notify,
+    cmd_slack_doctor,
+    cmd_slack_listen,
     cmd_telegram_poll,
     cmd_telegram_send,
     cmd_transcribe,
@@ -196,6 +199,38 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     ts.set_defaults(func=cmd_telegram_send)
+
+    nf = sub.add_parser(
+        "notify",
+        help="send a notification on the active transport (TODO_NOTIFY_TRANSPORT) to a route",
+    )
+    nf.add_argument("text", nargs="*")
+    nf.add_argument(
+        "--route",
+        default="default",
+        help="destination route mapped to a channel in ~/.todo/slack-routes.json "
+        "(default, capture, agents, digest, career, alerts)",
+    )
+    nf.add_argument(
+        "--button",
+        action="append",
+        default=[],
+        metavar="LABEL=VERB[:PAYLOAD]",
+        help="action button (repeatable); same verbs as telegram-send",
+    )
+    nf.add_argument("--thread", help="Slack thread ts to reply under")
+    nf.add_argument(
+        "--check",
+        action="store_true",
+        help="preflight only: print 'ready' or problem codes; exit 1 if not ready",
+    )
+    nf.set_defaults(func=cmd_notify)
+
+    sl = sub.add_parser("slack-listen", help="run the Slack Socket Mode capture daemon")
+    sl.set_defaults(func=cmd_slack_listen)
+
+    sd = sub.add_parser("slack-doctor", help="read-only Slack readiness checks")
+    sd.set_defaults(func=cmd_slack_doctor)
 
     tr = sub.add_parser(
         "transcribe",

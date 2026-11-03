@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Slack Socket Mode capture daemon. Idles until the keychain holds both
+     todo-cli/slack-bot and todo-cli/slack-app. Fill SLACK_ALLOWED_USER_ID
+     with your Slack member id before loading; empty = open mode. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.nathan.slack-capture</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/nathan/.local/bin/todo</string>
+    <string>slack-listen</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/Users/nathan/.local/bin</string>
+    <key>TODO_OBSIDIAN_VAULT</key><string>/Users/nathan/Notes/obsidian</string>
+    <key>TODO_TASK_BACKEND</key><string>linear</string>
+    <key>TODO_AGENT_BRIDGE_CMD</key><string>/Users/nathan/Developer/proj/cockpit/scripts/cockpit-remote-fire</string>
+    <key>TODO_NOTIFY_TRANSPORT</key><string>slack</string>
+    <key>SLACK_ALLOWED_USER_ID</key><string></string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/nathan/Library/Logs/slack-capture.log</string>
+  <key>StandardErrorPath</key><string>/Users/nathan/Library/Logs/slack-capture.log</string>
+</dict>
+</plist>

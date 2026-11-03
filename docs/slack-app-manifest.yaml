@@ -1,0 +1,46 @@
+# Slack app manifest for the todo capture bot (Socket Mode, single workspace).
+# Create at api.slack.com/apps → "From a manifest", install to the workspace,
+# then store the two tokens (never commit them):
+#   security add-generic-password -a slack-bot -s todo-cli -w '<xoxb-…>'
+#   security add-generic-password -a slack-app -s todo-cli -w '<xapp-…>'   # scope connections:write
+# Slash commands may collide with another installed app's /claude; rename here
+# and in TODO_AGENT_PREFIXES together if so.
+display_information:
+  name: Cockpit
+  description: Capture into Obsidian/Linear and agent notifications for Nathan.
+features:
+  bot_user:
+    display_name: cockpit
+    always_online: true
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  slash_commands:
+    - command: /claude
+      description: Fire a remote Claude session (/claude @project task)
+      usage_hint: "@project task"
+    - command: /sessions
+      description: List bridge-tracked agent sessions
+    - command: /kill
+      description: Kill a bridge-tracked agent session
+      usage_hint: "<local-id>"
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - channels:history
+      - groups:history
+      - im:history
+      - files:read
+      - commands
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+      - message.im
+  interactivity:
+    is_enabled: true
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false

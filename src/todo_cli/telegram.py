@@ -562,8 +562,14 @@ def _linear_complete(payload: str) -> str:
     return "done ✓"
 
 
-def _execute_action(action: dict, chat_id=None) -> str:
-    """Run one registered action. Returns the toast shown on the phone."""
+def _execute_action(action: dict, chat_id=None, agent_allowed: bool | None = None) -> str:
+    """Run one registered action. Returns the toast shown on the phone.
+
+    `agent_allowed` is the calling transport's own user lock; None keeps the
+    Telegram default (a non-empty TELEGRAM_ALLOWED_CHATS).
+    """
+    if agent_allowed is None:
+        agent_allowed = bool(TELEGRAM_ALLOWED_CHATS)
     verb = action.get("verb", "")
     payload = str(action.get("payload") or "")
     if verb == "ack":
@@ -593,8 +599,8 @@ def _execute_action(action: dict, chat_id=None) -> str:
         # Defense-in-depth: require a non-empty allow-list before dispatching
         # agent actions via callbacks, matching the message-lane gate in
         # _route_message ("open-mode bots must never fire agents from arbitrary senders").
-        if not TELEGRAM_ALLOWED_CHATS:
-            log("telegram: agent-action blocked — TELEGRAM_ALLOWED_CHATS is empty (open mode)")
+        if not agent_allowed:
+            log("agent-action blocked — the transport has no user allow-list (open mode)")
             return "agent actions require a configured chat allow-list"
         bridge = os.environ.get("TODO_AGENT_BRIDGE_CMD", "")
         if not bridge:

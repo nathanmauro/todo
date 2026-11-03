@@ -1,4 +1,5 @@
 """Static paths, env-driven settings, and API constants."""
+
 from __future__ import annotations
 
 import json
@@ -10,7 +11,9 @@ TODO_DIR = Path(os.environ.get("TODO_DIR", HOME / ".todo"))
 TODOS_FILE = TODO_DIR / "todos.jsonl"
 LOG_FILE = TODO_DIR / "todo.log"
 
-_LOGSEQ_GRAPH_RAW = Path(os.environ.get("TODO_LOGSEQ_GRAPH", HOME / "Notes" / "logseq")).expanduser()
+_LOGSEQ_GRAPH_RAW = Path(
+    os.environ.get("TODO_LOGSEQ_GRAPH", HOME / "Notes" / "logseq")
+).expanduser()
 if _LOGSEQ_GRAPH_RAW == HOME / "Notes":
     _LOGSEQ_GRAPH_RAW = HOME / "Notes" / "logseq"
 LOGSEQ_GRAPH = _LOGSEQ_GRAPH_RAW
@@ -19,9 +22,7 @@ LOGSEQ_GRAPH = _LOGSEQ_GRAPH_RAW
 # 2026-06-01). Phone (Telegram) and CLI captures each land as one Markdown file
 # under <vault>/captures/YYYY-MM-DD/. Override the path here when the vault moves
 # onto Google Drive for cross-device read/write — a single env flip, no code change.
-OBSIDIAN_VAULT = Path(
-    os.environ.get("TODO_OBSIDIAN_VAULT", HOME / "Notes" / "obsidian")
-)
+OBSIDIAN_VAULT = Path(os.environ.get("TODO_OBSIDIAN_VAULT", HOME / "Notes" / "obsidian"))
 
 # Todoist API v1
 TODOIST_API = "https://api.todoist.com/api/v1"
@@ -145,6 +146,7 @@ def require_backend() -> str:
         )
     return backend
 
+
 # --- Logseq task sync (frozen archive; OFF by default) ----------------------
 # Logseq (~/Notes/logseq) became a FROZEN read-only archive on 2026-06-01. The
 # CLI no longer writes task blocks/journal lines there unless this flag is
@@ -167,30 +169,46 @@ TELEGRAM_KEYCHAIN_ACCOUNT = os.environ.get("TODO_TELEGRAM_KEYCHAIN_ACCOUNT", "te
 # Exactly-once offset cursor. Lives under the neutral store dir (was under
 # ~/.notion-sync/ before the 2026-06-01 cutover; the live offset was migrated
 # across when the Notion lane was retired).
-TELEGRAM_STATE = Path(
-    os.environ.get("TODO_TELEGRAM_STATE", TODO_DIR / "telegram-state.json")
-)
+TELEGRAM_STATE = Path(os.environ.get("TODO_TELEGRAM_STATE", TODO_DIR / "telegram-state.json"))
 # Last sender chat_id, persisted so `todo telegram-send` can message Nathan back
 # (delivery enabler — the bot becomes a two-way channel, not just an inbox).
-TELEGRAM_CHAT = Path(
-    os.environ.get("TODO_TELEGRAM_CHAT", TODO_DIR / "telegram-chat.json")
-)
+TELEGRAM_CHAT = Path(os.environ.get("TODO_TELEGRAM_CHAT", TODO_DIR / "telegram-chat.json"))
 TELEGRAM_ENABLED = os.environ.get("TODO_TELEGRAM", "1") != "0"
 # Action registry for actionable notifications: callback_data is capped at 64
 # bytes, so an inline button carries only a short id and the full action (verb +
 # payload) lives here as one JSON file, written at send time and executed when
 # the tap's callback_query arrives through the same long poll.
-TELEGRAM_ACTIONS = Path(
-    os.environ.get("TODO_TELEGRAM_ACTIONS", TODO_DIR / "telegram-actions")
-)
+TELEGRAM_ACTIONS = Path(os.environ.get("TODO_TELEGRAM_ACTIONS", TODO_DIR / "telegram-actions"))
 # Single-user lock: comma-separated numeric chat ids allowed to drive the bot.
 # Empty = accept any chat (and the bot's reply tells you your chat_id so you can
 # lock it). A non-empty list silently drops messages from any other chat.
 TELEGRAM_ALLOWED_CHATS = [
-    c.strip()
-    for c in os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "").split(",")
-    if c.strip()
+    c.strip() for c in os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "").split(",") if c.strip()
 ]
+
+# --- Slack transport (replaces Telegram; migration started 2026-11-03) -------
+# A Socket Mode app: `todo slack-listen` holds an outbound websocket (no public
+# endpoint, same NAT property as the Telegram long poll) and `todo notify` posts
+# with the bot token. Two keychain items under service 'todo-cli': the bot token
+# (xoxb-, account 'slack-bot') and the app-level token (xapp-, account
+# 'slack-app', scope connections:write). Channel ids are local config, never code.
+SLACK_API = os.environ.get("TODO_SLACK_API", "https://slack.com/api")
+SLACK_BOT_KEYCHAIN_ACCOUNT = os.environ.get("TODO_SLACK_BOT_KEYCHAIN_ACCOUNT", "slack-bot")
+SLACK_APP_KEYCHAIN_ACCOUNT = os.environ.get("TODO_SLACK_APP_KEYCHAIN_ACCOUNT", "slack-app")
+# {"default": "<channel id>", "routes": {"capture": "<id>", "agents": "<id>", ...}}
+SLACK_ROUTES = Path(os.environ.get("TODO_SLACK_ROUTES", TODO_DIR / "slack-routes.json"))
+# Recently seen Socket Mode event ids (redelivery dedupe) and last-error stamps.
+SLACK_STATE = Path(os.environ.get("TODO_SLACK_STATE", TODO_DIR / "slack-state.json"))
+SLACK_ENABLED = os.environ.get("TODO_SLACK", "1") != "0"
+# Single-user lock: comma-separated Slack user ids (U...). Empty = open mode,
+# which still files captures but refuses agent commands.
+SLACK_ALLOWED_USERS = [
+    u.strip() for u in os.environ.get("SLACK_ALLOWED_USER_ID", "").split(",") if u.strip()
+]
+# Which transport `todo notify` (and the legacy `todo telegram-send`) delivers on:
+# telegram | slack | both. Stays "telegram" until the Slack path is verified live.
+NOTIFY_TRANSPORT = os.environ.get("TODO_NOTIFY_TRANSPORT", "telegram").strip().lower()
+
 # whisper.cpp CLI for voice-note transcription (brew install whisper-cpp).
 WHISPER_BIN = os.environ.get("TODO_WHISPER_BIN", "whisper-cli")
 # ggml model path; "" disables voice transcription (text captures still work).

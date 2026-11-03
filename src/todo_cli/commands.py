@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import backlog, config, gtasks, linear, logseq, obsidian, plan, telegram, todoist, transcribe as _transcribe_mod
+from . import backlog, config, gtasks, linear, logseq, obsidian, plan, slack, telegram, todoist, transcribe as _transcribe_mod
 from .config import (
     LOGSEQ_GRAPH,
     LOGSEQ_SYNC_ENABLED,
@@ -567,26 +567,108 @@ def _parse_button(spec: str) -> tuple[str, str, str]:
     return (label.strip(), verb, payload)
 
 
-def cmd_telegram_send(args: argparse.Namespace) -> int:
-    """Send a message to the last chat that messaged the capture bot.
+_TRANSPORTS = {"telegram": ("telegram",), "slack": ("slack",), "both": ("slack", "telegram")}
 
-    Lets the bot push a notification back to Nathan's phone (delivery enabler).
-    Requires that a message has been received at least once (so a chat_id is on
-    file) and that the BotFather token is stored. --button attaches inline
-    action buttons that the poll daemon executes on tap.
+
+def _notify_transports() -> tuple[str, ...]:
+    """Transports for TODO_NOTIFY_TRANSPORT; an unknown value fails loud."""
+    transport = config.NOTIFY_TRANSPORT
+    if transport not in _TRANSPORTS:
+        sys.exit(f"TODO_NOTIFY_TRANSPORT={transport!r}; expected one of {sorted(_TRANSPORTS)}")
+    return _TRANSPORTS[transport]
+
+
+def _notify(text: str, route: str, buttons: list[tuple[str, str, str]], thread: str | None) -> int:
+    """Deliver on every active transport. Exit 0 when at least one delivered.
+
+    Under `both`, one success is enough: producers treat exit 0 as delivered and
+    keep their own queue/dedupe, so failing a delivered message would re-send it.
+    """
+    delivered = 0
+    for transport in _notify_transports():
+        if transport == "slack":
+            result = slack.send(text, route=route, buttons=buttons or None, thread_ts=thread)
+            if result:
+                delivered += 1
+                print(f"slack: sent to route {route} ts {result.get('ts')}")
+            else:
+                print(f"slack: not sent to route {route} — run `todo slack-doctor`")
+        else:
+            if telegram.send(text, buttons=buttons or None):
+                delivered += 1
+                print("telegram: sent")
+            else:
+                print(
+                    "telegram: not sent — need a stored token AND a known chat_id "
+                    "(message the bot once so it records your chat)"
+                )
+    return 0 if delivered else 1
+
+
+def _notify_check(route: str) -> int:
+    """Preflight without sending: exit 0 only if every active transport is ready."""
+    problems: list[str] = []
+    for transport in _notify_transports():
+        if transport == "slack":
+            if not slack.bot_token():
+                problems.append("slack-token-missing")
+            elif not slack.resolve_channel(route):
+                problems.append("slack-route-unmapped")
+        else:
+            if not telegram.token():
+                problems.append("telegram-token-unreadable")
+            elif telegram.last_chat_id() is None:
+                problems.append("telegram-chat-unknown")
+    print(" ".join(problems) if problems else "ready")
+    return 1 if problems else 0
+
+
+def cmd_notify(args: argparse.Namespace) -> int:
+    """Send a notification on the active transport, to the channel for --route.
+
+    The transport-neutral replacement for `telegram-send`. --button attaches
+    action buttons executed by whichever daemon receives the tap.
+    """
+    route = args.route
+    if args.check:
+        return _notify_check(route)
+    text = " ".join(args.text).strip()
+    if not text:
+        sys.exit("empty message")
+    buttons = [_parse_button(spec) for spec in (getattr(args, "button", None) or [])]
+    return _notify(text, route, buttons, getattr(args, "thread", None))
+
+
+def cmd_telegram_send(args: argparse.Namespace) -> int:
+    """Legacy alias for `todo notify --route default` (kept until every producer moves).
+
+    Follows TODO_NOTIFY_TRANSPORT, so flipping it to `slack` cuts every
+    unmigrated producer over without touching them.
     """
     text = " ".join(args.text).strip()
     if not text:
         sys.exit("empty message")
     buttons = [_parse_button(spec) for spec in (getattr(args, "button", None) or [])]
-    if telegram.send(text, buttons=buttons or None):
-        print(f"telegram: sent to chat {telegram.last_chat_id()}")
+    return _notify(text, "default", buttons, None)
+
+
+def cmd_slack_listen(args: argparse.Namespace) -> int:
+    """Run the Slack Socket Mode capture daemon (launchd KeepAlive)."""
+    if not config.SLACK_ENABLED:
+        print("slack: disabled (TODO_SLACK=0)")
         return 0
-    print(
-        "telegram: not sent — need a stored token AND a known chat_id "
-        "(message the bot once so it records your chat)"
-    )
-    return 1
+    return slack.listen_forever()
+
+
+def cmd_slack_doctor(args: argparse.Namespace) -> int:
+    """Read-only Slack readiness report; exit 1 when a required check fails."""
+    checks = slack.doctor()
+    required = {"bot token (xoxb)", "app token (xapp)", "routes file", "auth.test"}
+    failed = False
+    for name, ok, detail in checks:
+        print(f"{'OK  ' if ok else 'FAIL'} {name}: {detail}")
+        failed = failed or (not ok and name in required)
+    return 1 if failed else 0
 
 
 def cmd_telegram_poll(args: argparse.Namespace) -> int:

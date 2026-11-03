@@ -5,6 +5,7 @@ description = "Local-first capture CLI: Obsidian vault notes + Todoist task sync
 requires-python = ">=3.10"
 dependencies = [
     "pydantic>=2.6",
+    "websocket-client>=1.7",
 ]
 
 [project.scripts]
