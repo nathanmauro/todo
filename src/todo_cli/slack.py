@@ -29,6 +29,7 @@ import datetime as dt
 import json
 import mimetypes
 import os
+import plistlib
 import re
 import subprocess
 import time
@@ -461,9 +462,18 @@ def _event_datetime(event: dict) -> dt.datetime:
 # --- inbound: capture --------------------------------------------------------
 
 
+# "@cockpit hope you are there" arrives as "<@U0…> hope you are there"; the
+# address is how Nathan talks to the bot, not part of the thought.
+_LEADING_MENTIONS = re.compile(r"^(?:\s*<@[UW][A-Z0-9]+>[\s,:]*)+")
+
+
+def _strip_leading_mentions(text: str) -> str:
+    return _LEADING_MENTIONS.sub("", text).strip()
+
+
 def file_message(event: dict, token: str) -> tuple[str, Path]:
     """Write one capture for a Slack message event; push `+t` tasks to Linear."""
-    text = str(event.get("text") or "").strip()
+    text = _strip_leading_mentions(str(event.get("text") or ""))
     files = [f for f in event.get("files") or [] if isinstance(f, dict)]
     stamp = _event_datetime(event)
     folder = obsidian.attachments_root() / "slack" / stamp.strftime("%Y-%m-%d")
@@ -568,9 +578,7 @@ def handle_block_actions(payload: dict) -> list[str]:
         toasts.append(toast)
 
     if toasts and channel and message.get("ts"):
-        _collapse_buttons(
-            channel, message, f"{last_label} → {toasts[-1]}"
-        )
+        _collapse_buttons(channel, message, f"{last_label} → {toasts[-1]}")
     return toasts
 
 
@@ -664,6 +672,7 @@ def run_socket_once(socket_factory: Callable[[str], Any] | None = None) -> str:
         socket_factory = lambda url: websocket.create_connection(url, timeout=90)  # noqa: E731
 
     ws = socket_factory(_open_socket_url(token))
+    _clear_error("listen")
     routes = load_routes()
     try:
         while True:
@@ -709,25 +718,40 @@ def listen_forever() -> int:
 # --- doctor ------------------------------------------------------------------
 
 
+LISTENER_PLIST = Path.home() / "Library/LaunchAgents/com.nathan.slack-capture.plist"
+
+
+def _token_check(name: str, token: str | None, prefix: str, account: str) -> tuple[str, bool, str]:
+    # Both tokens are long opaque strings; pasting the bot token into the app slot
+    # passes a presence check and only fails at apps.connections.open.
+    if not token:
+        return (name, False, f"missing: keychain todo-cli/{account}")
+    if not token.startswith(prefix):
+        return (name, False, f"wrong type: keychain todo-cli/{account} holds {token[:5]}…")
+    return (name, True, "present")
+
+
+def _user_lock_check() -> tuple[str, bool, str]:
+    """The listener's lock comes from its plist, not the shell running the doctor."""
+    if _locked():
+        return ("user lock", True, "locked (env)")
+    try:
+        with LISTENER_PLIST.open("rb") as handle:
+            env = plistlib.load(handle).get("EnvironmentVariables") or {}
+    except (OSError, plistlib.InvalidFileException):
+        env = {}
+    if str(env.get("SLACK_ALLOWED_USER_ID") or "").strip():
+        return ("user lock", True, "locked (listener plist)")
+    return ("user lock", False, "open mode: set SLACK_ALLOWED_USER_ID in the listener plist")
+
+
 def doctor() -> list[tuple[str, bool, str]]:
     """Read-only checks: (name, ok, detail). Never prints a secret."""
     checks: list[tuple[str, bool, str]] = []
     bot = bot_token()
     app = app_token()
-    checks.append(
-        (
-            "bot token (xoxb)",
-            bool(bot),
-            "present" if bot else "missing: keychain todo-cli/slack-bot",
-        )
-    )
-    checks.append(
-        (
-            "app token (xapp)",
-            bool(app),
-            "present" if app else "missing: keychain todo-cli/slack-app",
-        )
-    )
+    checks.append(_token_check("bot token (xoxb)", bot, "xoxb-", SLACK_BOT_KEYCHAIN_ACCOUNT))
+    checks.append(_token_check("app token (xapp)", app, "xapp-", SLACK_APP_KEYCHAIN_ACCOUNT))
 
     routes = load_routes()
     mapped = sorted((routes.get("routes") or {}).keys())
@@ -738,9 +762,7 @@ def doctor() -> list[tuple[str, bool, str]]:
             f"{SLACK_ROUTES} default={'set' if routes.get('default') else 'MISSING'} routes={mapped}",
         )
     )
-    checks.append(
-        ("user lock", _locked(), "locked" if _locked() else "open mode: set SLACK_ALLOWED_USER_ID")
-    )
+    checks.append(_user_lock_check())
 
     if bot:
         try:

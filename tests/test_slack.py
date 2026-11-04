@@ -330,3 +330,36 @@ def test_notify_transport_reads_file_and_env_wins(tmp_path, monkeypatch):
 
     monkeypatch.setenv("TODO_NOTIFY_TRANSPORT", "both")
     assert config._notify_transport() == "both"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("<@U0CERJYFEF6> hope you are there now", "hope you are there now"),
+        ("<@U0CERJYFEF6>: +t call mom", "+t call mom"),
+        ("ping <@U0D50R52P> later", "ping <@U0D50R52P> later"),
+        ("plain thought", "plain thought"),
+    ],
+)
+def test_strip_leading_mentions(raw, expected):
+    assert slack._strip_leading_mentions(raw) == expected
+
+
+def test_doctor_flags_bot_token_in_app_slot():
+    name, ok, detail = slack._token_check("app token (xapp)", "xoxb-123", "xapp-", "slack-app")
+    assert not ok
+    assert "wrong type" in detail
+    assert "123" not in detail
+
+
+def test_user_lock_reads_listener_plist(tmp_path, monkeypatch):
+    import plistlib
+
+    plist = tmp_path / "listener.plist"
+    plist.write_bytes(plistlib.dumps({"EnvironmentVariables": {"SLACK_ALLOWED_USER_ID": "U1"}}))
+    monkeypatch.setattr(slack, "SLACK_ALLOWED_USERS", [])
+    monkeypatch.setattr(slack, "LISTENER_PLIST", plist)
+    assert slack._user_lock_check()[1] is True
+
+    monkeypatch.setattr(slack, "LISTENER_PLIST", tmp_path / "missing.plist")
+    assert slack._user_lock_check()[1] is False
