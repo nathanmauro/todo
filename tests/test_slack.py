@@ -317,3 +317,16 @@ def test_notify_check_reports_problem_codes(env, monkeypatch, capsys):
     monkeypatch.setattr(slack, "bot_token", lambda: None)
     assert commands.cmd_notify(_notify_args(check=True)) == 1
     assert "slack-token-missing" in capsys.readouterr().out
+
+
+def test_notify_transport_reads_file_and_env_wins(tmp_path, monkeypatch):
+    switch = tmp_path / "notify-transport"
+    monkeypatch.setattr(config, "NOTIFY_TRANSPORT_FILE", switch)
+    monkeypatch.delenv("TODO_NOTIFY_TRANSPORT", raising=False)
+    assert config._notify_transport() == "telegram"
+
+    switch.write_text("Slack\n")
+    assert config._notify_transport() == "slack"
+
+    monkeypatch.setenv("TODO_NOTIFY_TRANSPORT", "both")
+    assert config._notify_transport() == "both"

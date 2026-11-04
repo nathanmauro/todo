@@ -19,10 +19,11 @@ Telegram lane until it is retired.
 - Slash commands — `/cc`, `/cc-sessions`, `/cc-kill` (mapped to the bridge's `/claude`, `/sessions`, `/kill`) go to `TODO_AGENT_BRIDGE_CMD`
   (Cockpit's `cockpit-remote-fire`) with the channel id as `--chat-id`.
 - `todo notify [--route R] [--button …] [--thread TS] text` — the transport-neutral
-  sender. `TODO_NOTIFY_TRANSPORT=telegram|slack|both` picks the wire (default
-  `telegram` until cutover). `todo telegram-send` is now an alias for
-  `notify --route default`, so flipping the variable moves every unmigrated
-  producer. `todo notify --check --route R` prints `ready` or problem codes.
+  sender. The wire (`telegram|slack|both`, default `telegram`) comes from the
+  one-word file `~/.todo/notify-transport`; `TODO_NOTIFY_TRANSPORT` overrides it
+  for one run. `todo telegram-send` is now an alias for `notify --route default`,
+  so writing the file moves every unmigrated producer at once.
+  `todo notify --check --route R` prints `ready` or problem codes.
 - `todo slack-doctor` — read-only: tokens present, routes, user lock, `auth.test`,
   last recorded send/listen error.
 
