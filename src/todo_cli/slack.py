@@ -352,20 +352,17 @@ def _authorized(user_id: str | None) -> bool:
 def is_capture_message(event: dict, routes: dict) -> bool:
     """Decide whether one Slack `message` event becomes an Obsidian capture.
 
-    Top-level human messages (and file shares) in the capture channel or the bot
-    DM are captures. Bot posts and edits/deletes never are, so the bot's own
-    "filed" replies cannot loop. Thread replies count too: replying under a
-    notification is the most natural place to jot a follow-up, and dropping it
-    would lose the thought.
+    Any human message the bot can see is a capture: the DM, #capture, #general,
+    a thread under a notification. Mauro is a one-person workspace, so whatever
+    Nathan types is a thought worth keeping, as it was with the Telegram bot.
+    Bot posts and edits/deletes never are, so the bot's own "filed" replies
+    cannot loop. `routes` stays in the signature for callers and tests.
     """
     if event.get("type") != "message":
         return False
     if event.get("bot_id") or event.get("subtype") not in (None, "file_share", "thread_broadcast"):
         return False
-    capture_channel = (routes.get("routes") or {}).get("capture")
-    return event.get("channel_type") == "im" or (
-        capture_channel is not None and event.get("channel") == capture_channel
-    )
+    return True
 
 
 # --- inbound: files and voice ------------------------------------------------

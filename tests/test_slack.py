@@ -113,7 +113,7 @@ def test_long_text_is_chunked_into_sections():
         ({"type": "message", "channel": "CCAPTURE", "subtype": "file_share"}, True),
         ({"type": "message", "channel": "CCAPTURE", "bot_id": "B1"}, False),
         ({"type": "message", "channel": "CCAPTURE", "subtype": "message_changed"}, False),
-        ({"type": "message", "channel": "COTHER", "user": "U"}, False),
+        ({"type": "message", "channel": "COTHER", "user": "U"}, True),
     ],
 )
 def test_is_capture_message(event, expected):
