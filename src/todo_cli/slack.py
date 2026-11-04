@@ -519,6 +519,11 @@ def _reply_text(kind: str, path: Path, user_id: str | None) -> str:
 def handle_message_event(event: dict, routes: dict) -> str | None:
     """Route one message event. Returns the capture kind, or None if ignored."""
     if not is_capture_message(event, routes):
+        log(
+            "slack: ignored message"
+            f" channel={event.get('channel')} channel_type={event.get('channel_type')}"
+            f" subtype={event.get('subtype')} bot={bool(event.get('bot_id'))}"
+        )
         return None
     user_id = event.get("user")
     if not _authorized(user_id):
