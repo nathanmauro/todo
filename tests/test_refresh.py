@@ -1,10 +1,8 @@
 """Refresh/audit convergence behavior."""
+
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-
-import pytest
 
 from todo_cli import commands, logseq, todoist
 from todo_cli.models import LogseqSync, TodoEntry, TodoistSync
@@ -63,15 +61,18 @@ def test_add_no_sync_defers_outbound(monkeypatch):
 
     monkeypatch.setattr(commands, "_sync_outbound", unexpected)
 
-    assert commands.cmd_add(
-        argparse.Namespace(
-            text=["defer", "me"],
-            source="cli",
-            due=None,
-            project=None,
-            no_sync=True,
+    assert (
+        commands.cmd_add(
+            argparse.Namespace(
+                text=["defer", "me"],
+                source="cli",
+                due=None,
+                project=None,
+                no_sync=True,
+            )
         )
-    ) == 0
+        == 0
+    )
     [entry] = load_all()
     assert entry.text == "defer me"
     assert entry.sync.todoist is None
@@ -79,7 +80,6 @@ def test_add_no_sync_defers_outbound(monkeypatch):
 
 
 def test_refresh_order_and_write_boundaries(monkeypatch):
-
 
     monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     write_all([TodoEntry(text="x")])
@@ -90,25 +90,21 @@ def test_refresh_order_and_write_boundaries(monkeypatch):
         "mirror",
         lambda entries, dry_run=False, covered=None: calls.append("mirror") or 0,
     )
-    monkeypatch.setattr(
-        logseq, "reconcile", lambda entries: calls.append("logseq.reconcile") or 0
-    )
+    monkeypatch.setattr(logseq, "reconcile", lambda entries: calls.append("logseq.reconcile") or 0)
     monkeypatch.setattr(
         todoist,
         "reconcile",
-        lambda entries, skip_project_ids=None: calls.append(
-            "todoist.reconcile(covered)"
-            if skip_project_ids is not None
-            else "todoist.reconcile(full)"
-        )
-        or 0,
+        lambda entries, skip_project_ids=None: (
+            calls.append(
+                "todoist.reconcile(covered)"
+                if skip_project_ids is not None
+                else "todoist.reconcile(full)"
+            )
+            or 0
+        ),
     )
-    monkeypatch.setattr(
-        logseq, "sync", lambda entries: calls.append("logseq.sync") or 0
-    )
-    monkeypatch.setattr(
-        todoist, "sync", lambda entries: calls.append("todoist.sync") or 0
-    )
+    monkeypatch.setattr(logseq, "sync", lambda entries: calls.append("logseq.sync") or 0)
+    monkeypatch.setattr(todoist, "sync", lambda entries: calls.append("todoist.sync") or 0)
     monkeypatch.setattr(commands, "write_all", lambda entries: calls.append("write"))
 
     assert commands.cmd_refresh(argparse.Namespace(dry_run=False)) == 0
@@ -147,14 +143,3 @@ def test_audit_counts(capsys):
     assert "open_local_missing_logseq: 1" in out
     assert "open_mirrored_missing_logseq_expected: 1" in out
     assert "notion_inbox_linked" not in out
-
-
-def test_session_hook_uses_refresh():
-    hook = Path(
-        "/Users/nathan/Developer/proj/cockpit/scripts/cockpit-todoist-session-hook"
-    )
-    if not hook.exists():
-        pytest.skip("cockpit hook is outside this checkout")
-    body = hook.read_text()
-    assert '"$TODO_BIN" refresh' in body
-    assert '"$TODO_BIN" pull' not in body
