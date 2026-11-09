@@ -32,7 +32,6 @@ from .commands import (
     cmd_slack_doctor,
     cmd_slack_listen,
     cmd_telegram_poll,
-    cmd_telegram_send,
     cmd_transcribe,
 )
 
@@ -183,26 +182,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tg.set_defaults(func=cmd_telegram_poll)
 
-    ts = sub.add_parser(
-        "telegram-send",
-        help="send a message to the last chat that messaged the capture bot",
-    )
-    ts.add_argument("text", nargs="+")
-    ts.add_argument(
-        "--button",
-        action="append",
-        default=[],
-        metavar="LABEL=VERB[:PAYLOAD]",
-        help=(
-            "inline action button (repeatable); "
-            "verbs: ack, add-task, idea-hot, todoist-complete"
-        ),
-    )
-    ts.set_defaults(func=cmd_telegram_send)
-
     nf = sub.add_parser(
         "notify",
-        help="send a notification on the active transport (TODO_NOTIFY_TRANSPORT) to a route",
+        help="send a Slack notification to a route",
     )
     nf.add_argument("text", nargs="*")
     nf.add_argument(
@@ -216,7 +198,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="LABEL=VERB[:PAYLOAD]",
-        help="action button (repeatable); same verbs as telegram-send",
+        help=(
+            "action button (repeatable); verbs: ack, add-task, idea-hot, "
+            "linear-complete, agent-*"
+        ),
     )
     nf.add_argument("--thread", help="Slack thread ts to reply under")
     nf.add_argument(

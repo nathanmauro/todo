@@ -6,7 +6,7 @@ import argparse
 import json
 
 import pytest
-from todo_cli import commands, config, obsidian, slack, telegram
+from todo_cli import commands, obsidian, slack, telegram
 
 ROUTES = {"default": "CDEFAULT", "routes": {"capture": "CCAPTURE", "agents": "CAGENTS"}}
 
@@ -63,6 +63,7 @@ def env(tmp_path, monkeypatch):
         lambda text, source="telegram": pushed.append((text, source)) or True,
     )
     fake.pushed = pushed
+    fake.tmp_path = tmp_path
     return fake
 
 
@@ -298,38 +299,52 @@ def _notify_args(**kw):
     return argparse.Namespace(**base)
 
 
-def test_notify_both_succeeds_when_one_transport_delivers(env, monkeypatch):
-    monkeypatch.setattr(config, "NOTIFY_TRANSPORT", "both")
-    monkeypatch.setattr(telegram, "send", lambda text, buttons=None: False)
+def test_notify_posts_to_the_route_channel(env, capsys):
+    assert commands.cmd_notify(_notify_args(route="agents")) == 0
+    assert env.of("chat.postMessage")[0]["channel"] == "CAGENTS"
+    assert capsys.readouterr().out == "slack: sent to route agents ts 1.1\n"
+
+
+def test_notify_exits_nonzero_when_slack_rejects(env, monkeypatch, capsys):
+    monkeypatch.setattr(slack, "bot_token", lambda: None)
+    assert commands.cmd_notify(_notify_args()) == 1
+    assert "slack: not sent to route career" in capsys.readouterr().out
+
+
+def test_notify_ignores_the_retired_transport_switch(env, monkeypatch):
+    # launchd plists may still export it; Slack is the only wire now.
+    monkeypatch.setenv("TODO_NOTIFY_TRANSPORT", "telegram")
     assert commands.cmd_notify(_notify_args()) == 0
     assert env.of("chat.postMessage")[0]["channel"] == "CDEFAULT"
 
 
-def test_legacy_telegram_send_follows_transport(env, monkeypatch):
-    monkeypatch.setattr(config, "NOTIFY_TRANSPORT", "slack")
-    assert commands.cmd_telegram_send(argparse.Namespace(text=["hi"], button=[])) == 0
-    assert env.of("chat.postMessage")[0]["channel"] == "CDEFAULT"
-
-
 def test_notify_check_reports_problem_codes(env, monkeypatch, capsys):
-    monkeypatch.setattr(config, "NOTIFY_TRANSPORT", "slack")
     assert commands.cmd_notify(_notify_args(check=True)) == 0
+    assert capsys.readouterr().out == "ready\n"
+
+    (env.tmp_path / "slack-routes.json").write_text("{}")
+    assert commands.cmd_notify(_notify_args(check=True)) == 1
+    assert capsys.readouterr().out == "slack-route-unmapped\n"
+
     monkeypatch.setattr(slack, "bot_token", lambda: None)
     assert commands.cmd_notify(_notify_args(check=True)) == 1
-    assert "slack-token-missing" in capsys.readouterr().out
+    assert capsys.readouterr().out == "slack-token-missing\n"
 
 
-def test_notify_transport_reads_file_and_env_wins(tmp_path, monkeypatch):
-    switch = tmp_path / "notify-transport"
-    monkeypatch.setattr(config, "NOTIFY_TRANSPORT_FILE", switch)
-    monkeypatch.delenv("TODO_NOTIFY_TRANSPORT", raising=False)
-    assert config._notify_transport() == "telegram"
+def test_notify_cli_surface_is_unchanged():
+    from todo_cli.cli import build_parser
 
-    switch.write_text("Slack\n")
-    assert config._notify_transport() == "slack"
-
-    monkeypatch.setenv("TODO_NOTIFY_TRANSPORT", "both")
-    assert config._notify_transport() == "both"
+    args = build_parser().parse_args(
+        ["notify", "--route", "digest", "--button", "Seen=ack:n1", "--thread", "1.2", "hi", "there"]
+    )
+    assert (args.route, args.button, args.thread, args.check) == (
+        "digest",
+        ["Seen=ack:n1"],
+        "1.2",
+        False,
+    )
+    assert args.text == ["hi", "there"]
+    assert build_parser().parse_args(["notify", "--check"]).check is True
 
 
 @pytest.mark.parametrize(

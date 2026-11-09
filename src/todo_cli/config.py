@@ -205,27 +205,6 @@ SLACK_ENABLED = os.environ.get("TODO_SLACK", "1") != "0"
 SLACK_ALLOWED_USERS = [
     u.strip() for u in os.environ.get("SLACK_ALLOWED_USER_ID", "").split(",") if u.strip()
 ]
-# Which transport `todo notify` (and the legacy `todo telegram-send`) delivers on:
-# telegram | slack | both. Producers run under launchd, cron, and hooks with no
-# shared env, so the machine-wide switch is a one-word file; the env var still
-# wins for a single run.
-NOTIFY_TRANSPORT_FILE = Path(
-    os.environ.get("TODO_NOTIFY_TRANSPORT_FILE", TODO_DIR / "notify-transport")
-)
-
-
-def _notify_transport() -> str:
-    from_env = os.environ.get("TODO_NOTIFY_TRANSPORT")
-    if from_env:
-        return from_env.strip().lower()
-    try:
-        from_file = NOTIFY_TRANSPORT_FILE.read_text().strip().lower()
-    except OSError:
-        from_file = ""
-    return from_file or "telegram"
-
-
-NOTIFY_TRANSPORT = _notify_transport()
 
 # whisper.cpp CLI for voice-note transcription (brew install whisper-cpp).
 WHISPER_BIN = os.environ.get("TODO_WHISPER_BIN", "whisper-cli")
