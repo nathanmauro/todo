@@ -11,13 +11,15 @@ Frontmatter contract (do not over-design): id, created, source, type, status, ta
 Tasks are written as a "- [ ] ..." checkbox so Obsidian renders them as tasks;
 notes and ideas are plain body text.
 """
+
 from __future__ import annotations
 
 import datetime as dt
 import json
 import secrets
-from typing import Any
+import urllib.parse
 from pathlib import Path
+from typing import Any
 
 from .config import OBSIDIAN_VAULT
 from .storage import log
@@ -35,6 +37,36 @@ def attachments_root() -> Path:
     return OBSIDIAN_VAULT / "Attachments"
 
 
+def vault_relative(path: Path) -> str:
+    """`path` as a vault-relative string; unchanged when it lies outside the vault."""
+    try:
+        return str(path.relative_to(OBSIDIAN_VAULT))
+    except ValueError:
+        return str(path)
+
+
+def unique_path(path: Path) -> Path:
+    """`path`, or its first free `-2`, `-3`, ... sibling when it already exists."""
+    if not path.exists():
+        return path
+    for i in range(2, 1000):
+        candidate = path.with_name(f"{path.stem}-{i}{path.suffix}")
+        if not candidate.exists():
+            return candidate
+    raise OSError(f"could not allocate unique attachment path for {path}")
+
+
+def deep_link(path: Path) -> str:
+    """An obsidian:// URI that opens `path` in the desktop or mobile app.
+
+    The vault name is the directory name of OBSIDIAN_VAULT (e.g. "obsidian").
+    The file parameter is vault-relative and URL-encoded (spaces become %20).
+    """
+    vault_name = urllib.parse.quote(OBSIDIAN_VAULT.name)
+    encoded = urllib.parse.quote(vault_relative(path), safe="/")
+    return f"obsidian://open?vault={vault_name}&file={encoded}"
+
+
 def _yaml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -45,9 +77,15 @@ def _yaml_value(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _frontmatter(id8: str, created: str, source: str, kind: str,
-                 status: str, tags: list[str],
-                 metadata: dict[str, Any] | None = None) -> str:
+def _frontmatter(
+    id8: str,
+    created: str,
+    source: str,
+    kind: str,
+    status: str,
+    tags: list[str],
+    metadata: dict[str, Any] | None = None,
+) -> str:
     body = (
         "---\n"
         f"id: {id8}\n"
@@ -62,11 +100,17 @@ def _frontmatter(id8: str, created: str, source: str, kind: str,
     return body + "---\n"
 
 
-def write_capture(text: str, kind: str = "note", source: str = "telegram", *,
-                  id8: str | None = None, created: str | None = None,
-                  tags: list[str] | None = None,
-                  metadata: dict[str, Any] | None = None,
-                  extra_body: str | None = None) -> Path:
+def write_capture(
+    text: str,
+    kind: str = "note",
+    source: str = "cli",
+    *,
+    id8: str | None = None,
+    created: str | None = None,
+    tags: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
+    extra_body: str | None = None,
+) -> Path:
     """Write one capture as its own Markdown file; return the path.
 
     `kind` is one of note|idea|task. Tasks become a Markdown checkbox so they
@@ -89,9 +133,10 @@ def write_capture(text: str, kind: str = "note", source: str = "telegram", *,
     if extra_body:
         body = body.rstrip() + "\n\n" + extra_body.strip()
     path.write_text(
-        _frontmatter(
-            id8, created, source, kind, "open", tags, metadata=metadata
-        ) + "\n" + body + "\n"
+        _frontmatter(id8, created, source, kind, "open", tags, metadata=metadata)
+        + "\n"
+        + body
+        + "\n"
     )
     log(f"obsidian capture {kind} -> {path}")
     return path

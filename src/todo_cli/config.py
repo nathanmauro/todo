@@ -19,7 +19,7 @@ if _LOGSEQ_GRAPH_RAW == HOME / "Notes":
 LOGSEQ_GRAPH = _LOGSEQ_GRAPH_RAW
 
 # Obsidian vault — the canonical capture/memory store (plan-transition.md,
-# 2026-06-01). Phone (Telegram) and CLI captures each land as one Markdown file
+# 2026-06-01). Phone (Slack) and CLI captures each land as one Markdown file
 # under <vault>/captures/YYYY-MM-DD/. Override the path here when the vault moves
 # onto Google Drive for cross-device read/write — a single env flip, no code change.
 OBSIDIAN_VAULT = Path(os.environ.get("TODO_OBSIDIAN_VAULT", HOME / "Notes" / "obsidian"))
@@ -155,43 +155,19 @@ def require_backend() -> str:
 # re-enabled for a one-off backfill without resurrecting code.
 LOGSEQ_SYNC_ENABLED = os.environ.get("TODO_LOGSEQ_SYNC", "0") == "1"
 
-# --- Telegram -> Obsidian capture lane --------------------------------------
-# A @BotFather bot is the mobile front door. `todo telegram-poll --loop` runs a
-# getUpdates long-poll daemon (no public endpoint, works behind NAT); each
-# message becomes one Markdown file in the Obsidian vault under
-# captures/YYYY-MM-DD/ (see obsidian.py). "+t" tasks also push to Todoist. Voice
-# notes are transcribed locally with whisper.cpp. Token from the login keychain
-# (account 'telegram', service 'todo-cli'). The last update_id is persisted as
-# the exactly-once offset cursor; the sender chat_id is persisted so the bot can
-# proactively message back (see TELEGRAM_CHAT below).
-TELEGRAM_API = "https://api.telegram.org"
-TELEGRAM_KEYCHAIN_ACCOUNT = os.environ.get("TODO_TELEGRAM_KEYCHAIN_ACCOUNT", "telegram")
-# Exactly-once offset cursor. Lives under the neutral store dir (was under
-# ~/.notion-sync/ before the 2026-06-01 cutover; the live offset was migrated
-# across when the Notion lane was retired).
-TELEGRAM_STATE = Path(os.environ.get("TODO_TELEGRAM_STATE", TODO_DIR / "telegram-state.json"))
-# Last sender chat_id, persisted so `todo telegram-send` can message Nathan back
-# (delivery enabler — the bot becomes a two-way channel, not just an inbox).
-TELEGRAM_CHAT = Path(os.environ.get("TODO_TELEGRAM_CHAT", TODO_DIR / "telegram-chat.json"))
-TELEGRAM_ENABLED = os.environ.get("TODO_TELEGRAM", "1") != "0"
-# Action registry for actionable notifications: callback_data is capped at 64
-# bytes, so an inline button carries only a short id and the full action (verb +
-# payload) lives here as one JSON file, written at send time and executed when
-# the tap's callback_query arrives through the same long poll.
-TELEGRAM_ACTIONS = Path(os.environ.get("TODO_TELEGRAM_ACTIONS", TODO_DIR / "telegram-actions"))
-# Single-user lock: comma-separated numeric chat ids allowed to drive the bot.
-# Empty = accept any chat (and the bot's reply tells you your chat_id so you can
-# lock it). A non-empty list silently drops messages from any other chat.
-TELEGRAM_ALLOWED_CHATS = [
-    c.strip() for c in os.environ.get("TELEGRAM_ALLOWED_CHAT_ID", "").split(",") if c.strip()
-]
+# --- Action registry (actionable notifications) -------------------------------
+# A notification button carries only a short id; the full action (verb + payload)
+# lives here as one JSON file, written at send time and executed when the click
+# arrives. Other tools read these files (Job Scout's career learning), so the
+# directory is shared state, not a private cache.
+ACTIONS_DIR = Path(os.environ.get("TODO_ACTIONS", TODO_DIR / "actions"))
 
-# --- Slack transport (replaces Telegram; migration started 2026-11-03) -------
+# --- Slack transport (the mobile front door since 2026-11-03) -----------------
 # A Socket Mode app: `todo slack-listen` holds an outbound websocket (no public
-# endpoint, same NAT property as the Telegram long poll) and `todo notify` posts
-# with the bot token. Two keychain items under service 'todo-cli': the bot token
-# (xoxb-, account 'slack-bot') and the app-level token (xapp-, account
-# 'slack-app', scope connections:write). Channel ids are local config, never code.
+# endpoint, works behind NAT) and `todo notify` posts with the bot token. Two
+# keychain items under service 'todo-cli': the bot token (xoxb-, account
+# 'slack-bot') and the app-level token (xapp-, account 'slack-app', scope
+# connections:write). Channel ids are local config, never code.
 SLACK_API = os.environ.get("TODO_SLACK_API", "https://slack.com/api")
 SLACK_BOT_KEYCHAIN_ACCOUNT = os.environ.get("TODO_SLACK_BOT_KEYCHAIN_ACCOUNT", "slack-bot")
 SLACK_APP_KEYCHAIN_ACCOUNT = os.environ.get("TODO_SLACK_APP_KEYCHAIN_ACCOUNT", "slack-app")

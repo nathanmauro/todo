@@ -1,22 +1,22 @@
-"""Slack transport: the replacement for the Telegram front door (2026-11-03).
+"""Slack transport: the mobile front door and the notification wire (2026-11-03).
 
 Two directions, one Socket Mode app:
 
 - Outbound: `send()` posts to a channel picked by *route* (capture, agents,
-  digest, career, alerts, ...) through `chat.postMessage`. Buttons reuse the
-  transport-neutral action registry (`telegram._new_action`), so a Slack tap
-  writes the same ~/.todo/telegram-actions/<id>.json record that Job Scout's
-  career_learning already reads for acks and snoozes.
+  digest, career, alerts, ...) through `chat.postMessage`. Buttons go through
+  the action registry (`actions.register`), so a click resolves the
+  ~/.todo/actions/<id>.json record that Job Scout's career_learning also reads
+  for acks and snoozes.
 - Inbound: `listen_forever()` holds a Socket Mode websocket (outbound only; no
-  public endpoint, works behind NAT like the Telegram long poll). Messages in
-  the capture channel or the bot DM become one Obsidian capture each; `+t` also
-  pushes to Linear. Files are saved under Attachments/slack/, voice clips are
-  transcribed locally. Button clicks execute the registered action exactly once.
-  Slash commands (/claude, /sessions, /kill) hand off to the agent bridge.
+  public endpoint, works behind NAT). Every human message the bot can see
+  becomes one Obsidian capture; `+t` also pushes to Linear. Files are saved
+  under Attachments/slack/, voice clips are transcribed locally. Button clicks
+  execute the registered action exactly once. Slash commands (/cc,
+  /cc-sessions, /cc-kill) hand off to the agent bridge.
 
-Only the wire is Slack-specific. Classification, the Obsidian writer, the Linear
-push, and the action executor are the same functions the Telegram lane uses; the
-Telegram retirement slice moves them out of telegram.py.
+Only the wire lives here. Classification and the task push are capture.py, the
+Obsidian writer is obsidian.py, and the action registry and executor are
+actions.py.
 
 Tokens: login keychain service 'todo-cli', accounts 'slack-bot' (xoxb-) and
 'slack-app' (xapp-), or SLACK_BOT_TOKEN / SLACK_APP_TOKEN. Channel ids live in
@@ -39,8 +39,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from . import obsidian
-from . import telegram as core
+from . import actions, capture, obsidian
 from . import transcribe as _transcribe_mod
 from .config import (
     KEYCHAIN_SERVICE,
@@ -66,6 +65,8 @@ _MAX_BUTTONS = 25
 _BUTTON_LABEL_LIMIT = 75
 _SEEN_EVENT_LIMIT = 500
 _ACTION_ID_PREFIX = "todo_action"
+# Stamped on every capture, task row and completion this transport produces.
+SOURCE = "slack"
 # Slack slash command -> agent-bridge grammar. Prefixed so they cannot collide
 # with another app's /claude in the workspace.
 SLASH_TO_BRIDGE = {"/cc": "/claude", "/cc-sessions": "/sessions", "/cc-kill": "/kill"}
@@ -251,10 +252,10 @@ def send(
 ) -> dict | None:
     """Post `text` to the route's channel. Returns {"channel", "ts"} or None.
 
-    `buttons` are (label, verb, payload) like telegram.send: each is registered
-    in the shared action registry and rendered as a Block Kit button whose
-    value is the action id. Failure is logged and returned as None so callers
-    keep their own retry/queue semantics.
+    `buttons` are (label, verb, payload): each is registered in the action
+    registry and rendered as a Block Kit button whose value is the action id.
+    Failure is logged and returned as None so callers keep their own
+    retry/queue semantics.
     """
     token = bot_token()
     if not token:
@@ -267,7 +268,7 @@ def send(
 
     registered: list[tuple[str, str]] = []
     for label, verb, payload in buttons or []:
-        action_id = core._new_action(verb, payload, label)
+        action_id = actions.register(verb, payload, label)
         if action_id:
             registered.append((label, action_id))
 
@@ -355,7 +356,7 @@ def is_capture_message(event: dict, routes: dict) -> bool:
 
     Any human message the bot can see is a capture: the DM, #capture, #general,
     a thread under a notification. Mauro is a one-person workspace, so whatever
-    Nathan types is a thought worth keeping, as it was with the Telegram bot.
+    Nathan types is a thought worth keeping.
     Bot posts and edits/deletes never are, so the bot's own "filed" replies
     cannot loop. `routes` stays in the signature for callers and tests.
     """
@@ -413,14 +414,14 @@ def _download_file(token: str, file: dict, folder: Path) -> dict[str, Any]:
         suffix = mimetypes.guess_extension(str(file["mimetype"])) or ""
     name = _safe_filename(str(file.get("name") or ""), f"slack-{file.get('id', 'file')}{suffix}")
     folder.mkdir(parents=True, exist_ok=True)
-    destination = core._unique_path(folder / name)
+    destination = obsidian.unique_path(folder / name)
     try:
         destination.write_bytes(data)
     except OSError as exc:
         record["error"] = f"write failed: {exc}"
         return record
     record.update(
-        {"downloaded": True, "path": core._vault_relative(destination), "bytes": len(data)}
+        {"downloaded": True, "path": obsidian.vault_relative(destination), "bytes": len(data)}
     )
     record["_abs_path"] = str(destination)
     return record
@@ -461,6 +462,9 @@ def _event_datetime(event: dict) -> dt.datetime:
 
 # --- inbound: capture --------------------------------------------------------
 
+# Capture paths whose `+t` push did not land, so the reply can say "queued".
+_PUSH_QUEUED: set[str] = set()
+
 
 # "@cockpit hope you are there" arrives as "<@U0…> hope you are there"; the
 # address is how Nathan talks to the bot, not part of the thought.
@@ -482,7 +486,7 @@ def file_message(event: dict, token: str) -> tuple[str, Path]:
     if not text:
         text = _transcribe_first_audio(records, files) or ""
     if text:
-        kind, body = core.classify(text)
+        kind, body = capture.classify(text)
     else:
         kind, body = "note", f"Slack file share received ({len(files)} file(s))"
 
@@ -499,25 +503,25 @@ def file_message(event: dict, token: str) -> tuple[str, Path]:
     path = obsidian.write_capture(
         body,
         kind=kind,
-        source="slack",
+        source=SOURCE,
         created=stamp.isoformat(timespec="seconds"),
         metadata={k: v for k, v in metadata.items() if v is not None},
         extra_body=_attachments_body(records) if records else None,
     )
-    if kind == "task" and not core._push_task(body, source="slack"):
-        core._LAST_PUSH_QUEUED.add(str(path))
+    if kind == "task" and not capture.push_task(body, SOURCE):
+        _PUSH_QUEUED.add(str(path))
     return kind, path
 
 
 def _reply_text(kind: str, path: Path, user_id: str | None) -> str:
     message = f"filed ✓ {kind}"
     if kind == "task":
-        if str(path) in core._LAST_PUSH_QUEUED:
-            core._LAST_PUSH_QUEUED.discard(str(path))
-            message += f" → saved locally, {core._task_backend_name()} push queued (see todo.log)"
+        if str(path) in _PUSH_QUEUED:
+            _PUSH_QUEUED.discard(str(path))
+            message += f" → saved locally, {capture.task_backend_name()} push queued (see todo.log)"
         else:
-            message += f" → {core._task_backend_name()}"
-    message += f"\n{core._obsidian_deep_link(path)}"
+            message += f" → {capture.task_backend_name()}"
+    message += f"\n{obsidian.deep_link(path)}"
     if not _locked():
         message += f"\nuser {user_id} — set SLACK_ALLOWED_USER_ID to this to lock the bot to you"
     return message
@@ -566,14 +570,14 @@ def handle_block_actions(payload: dict) -> list[str]:
         if not str(clicked.get("action_id", "")).startswith(_ACTION_ID_PREFIX):
             continue
         last_label = str((clicked.get("text") or {}).get("text") or "")
-        action = core._load_action(str(clicked.get("value") or ""))
+        action = actions.load(str(clicked.get("value") or ""))
         if action is None:
             toast = "unknown or expired action"
         elif action.get("status") == "done":
             toast = "already done ✓"
         else:
-            toast = core._execute_action(action, chat_id=channel, agent_allowed=_locked())
-            core._mark_action(action["id"], "done", toast)
+            toast = actions.execute(action, source=SOURCE, chat_id=channel, agent_allowed=_locked())
+            actions.mark(action["id"], "done", toast)
             log(f"slack action {action['id']} ({action.get('verb')}): {toast}")
         toasts.append(toast)
 
@@ -616,7 +620,7 @@ def handle_slash_command(payload: dict) -> str:
         log(f"slack: refused {command} from unauthorized user {user_id}")
         return "not authorized"
     bridge_command = SLASH_TO_BRIDGE.get(command, command)
-    if bridge_command not in core._agent_prefixes():
+    if bridge_command not in capture.agent_prefixes():
         return f"unknown command {command}"
     bridge = os.environ.get("TODO_AGENT_BRIDGE_CMD", "")
     if not bridge:

@@ -6,7 +6,7 @@ import argparse
 import json
 
 import pytest
-from todo_cli import commands, obsidian, slack, telegram
+from todo_cli import actions, capture, commands, obsidian, slack
 
 ROUTES = {"default": "CDEFAULT", "routes": {"capture": "CCAPTURE", "agents": "CAGENTS"}}
 
@@ -47,7 +47,7 @@ class FakeSlack:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(obsidian, "OBSIDIAN_VAULT", tmp_path / "vault")
-    monkeypatch.setattr(telegram, "TELEGRAM_ACTIONS", tmp_path / "actions")
+    monkeypatch.setattr(actions, "ACTIONS_DIR", tmp_path / "actions")
     monkeypatch.setattr(slack, "SLACK_ROUTES", tmp_path / "slack-routes.json")
     monkeypatch.setattr(slack, "SLACK_STATE", tmp_path / "slack-state.json")
     monkeypatch.setattr(slack, "SLACK_ALLOWED_USERS", ["UNATHAN"])
@@ -58,9 +58,9 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(slack, "_http", fake)
     pushed = []
     monkeypatch.setattr(
-        telegram,
-        "_push_task",
-        lambda text, source="telegram": pushed.append((text, source)) or True,
+        capture,
+        "push_task",
+        lambda text, source: pushed.append((text, source)) or True,
     )
     fake.pushed = pushed
     fake.tmp_path = tmp_path
@@ -212,12 +212,83 @@ def test_button_click_executes_once_and_collapses(env):
     assert all(b["type"] != "actions" for b in update["blocks"])
 
 
-def test_agent_button_uses_slack_lock_not_telegram(env, monkeypatch):
-    monkeypatch.setattr(telegram, "TELEGRAM_ALLOWED_CHATS", [])
-    monkeypatch.delenv("TODO_AGENT_BRIDGE_CMD", raising=False)
-    action_id = telegram._new_action("agent-kill", "rf-1", "Kill")
-    toast = telegram._execute_action(telegram._load_action(action_id), agent_allowed=True)
-    assert toast == "agent bridge not configured (set TODO_AGENT_BRIDGE_CMD)"
+def _click(env, verb, payload, user="UNATHAN"):
+    """Send one button and return the block_actions payload for clicking it."""
+    slack.send("digest", buttons=[("Go", verb, payload)])
+    posted = env.of("chat.postMessage")[-1]
+    return {
+        "type": "block_actions",
+        "user": {"id": user},
+        "channel": {"id": "CDEFAULT"},
+        "message": {"ts": "1.1", "text": "digest", "blocks": posted["blocks"]},
+        "actions": [dict(posted["blocks"][-1]["elements"][0])],
+    }
+
+
+def test_add_task_button_pushes_a_slack_sourced_task_once(env):
+    payload = _click(env, "add-task", "Buy milk")
+
+    assert slack.handle_block_actions(payload) == ["task → Linear ✓"]
+    assert slack.handle_block_actions(payload) == ["already done ✓"]
+    assert env.pushed == [("Buy milk", "slack")]
+
+
+def test_button_click_from_unauthorized_user_is_dropped(env):
+    payload = _click(env, "add-task", "Buy milk", user="USTRANGER")
+    action_id = payload["actions"][0]["value"]
+
+    assert slack.handle_block_actions(payload) == []
+    assert env.pushed == []
+    assert actions.load(action_id)["status"] == "pending"
+    assert env.of("chat.update") == []
+
+
+def test_button_click_on_unknown_action_answers_gracefully(env):
+    payload = _click(env, "ack", "n1")
+    payload["actions"][0]["value"] = "ffffffffffff"
+
+    assert slack.handle_block_actions(payload) == ["unknown or expired action"]
+
+
+def test_agent_button_is_gated_by_the_slack_user_lock(env, monkeypatch):
+    fired = []
+
+    def fake_run(args, **kwargs):
+        fired.append(args)
+        return argparse.Namespace(stdout="killed rf-1\n", stderr="")
+
+    monkeypatch.setenv("TODO_AGENT_BRIDGE_CMD", "/bin/bridge")
+    monkeypatch.setattr(actions.subprocess, "run", fake_run)
+
+    assert slack.handle_block_actions(_click(env, "agent-kill", "rf-1")) == ["killed rf-1"]
+    # The frozen bridge contract for a button: --action, --payload, --chat-id.
+    assert fired == [
+        ["/bin/bridge", "--action", "agent-kill", "--payload", "rf-1", "--chat-id", "CDEFAULT"]
+    ]
+
+    # Open mode: the listener has no allow-list, so agent verbs are refused.
+    monkeypatch.setattr(slack, "SLACK_ALLOWED_USERS", [])
+    toasts = slack.handle_block_actions(_click(env, "agent-kill", "rf-2"))
+    assert toasts == ["agent actions require a configured chat allow-list"]
+    assert len(fired) == 1
+
+
+def test_queued_task_reply_says_so_once(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(capture, "push_task", lambda text, source: False)
+    event = {
+        "type": "message",
+        "channel": "CCAPTURE",
+        "user": "UNATHAN",
+        "text": "+t buy milk",
+        "ts": "1700000000.3",
+    }
+
+    assert slack.handle_message_event(event, ROUTES) == "task"
+
+    reply = env.of("chat.postMessage")[0]["text"]
+    assert "saved locally, Linear push queued (see todo.log)" in reply
+    assert "obsidian://open?vault=vault&amp;file=captures/" in reply
+    assert slack._PUSH_QUEUED == set()
 
 
 def test_slash_command_requires_lock_and_fires_bridge(env, monkeypatch):

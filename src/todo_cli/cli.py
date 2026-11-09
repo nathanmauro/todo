@@ -4,36 +4,35 @@ Storage: ~/.todo/todos.jsonl (append-only JSON Lines). Notes/captures land in th
 Obsidian vault (the canonical store); tasks push to Todoist. Logseq is a frozen
 archive — its task-sync writers are gated off behind TODO_LOGSEQ_SYNC.
 """
+
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 import sys
-
-from .storage import LockTimeout
+from pathlib import Path
 
 from .commands import (
-    cmd_linear_adopt,
     cmd_add,
     cmd_audit,
     cmd_backlog,
     cmd_doctor,
     cmd_done,
     cmd_edit,
+    cmd_linear_adopt,
     cmd_ls,
     cmd_note,
+    cmd_notify,
     cmd_plan,
     cmd_pull,
-    cmd_refresh,
     cmd_reconcile,
+    cmd_refresh,
     cmd_rm,
-    cmd_sync,
-    cmd_notify,
     cmd_slack_doctor,
     cmd_slack_listen,
-    cmd_telegram_poll,
+    cmd_sync,
     cmd_transcribe,
 )
+from .storage import LockTimeout
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,10 +44,25 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--due", help="ISO date YYYY-MM-DD")
     a.add_argument("--source", default="cli")
     a.add_argument("--project", help="project tag / Linear project name (e.g. Cockpit, Personal)")
-    a.add_argument("--priority", choices=["p1", "p2", "p3", "p4"], help="Todoist-style priority (Linear: p1 urgent … p4 none)")
-    a.add_argument("--dest", choices=["inbox", "current", "idea"], help="inbox=Todo+capture label (default), current=In Progress, idea=Backlog+idea label")
-    a.add_argument("--notes", help="body text for the Linear issue (provenance, context); the title stays the task text")
-    a.add_argument("--id", dest="row_id", help="stable row id supplied by a queue (cockpit-task-drain); re-adding the same id is a no-op")
+    a.add_argument(
+        "--priority",
+        choices=["p1", "p2", "p3", "p4"],
+        help="Todoist-style priority (Linear: p1 urgent … p4 none)",
+    )
+    a.add_argument(
+        "--dest",
+        choices=["inbox", "current", "idea"],
+        help="inbox=Todo+capture label (default), current=In Progress, idea=Backlog+idea label",
+    )
+    a.add_argument(
+        "--notes",
+        help="body text for the Linear issue (provenance, context); the title stays the task text",
+    )
+    a.add_argument(
+        "--id",
+        dest="row_id",
+        help="stable row id supplied by a queue (cockpit-task-drain); re-adding the same id is a no-op",
+    )
     a.add_argument(
         "--no-sync",
         action="store_true",
@@ -60,8 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
     ls.add_argument("--all", dest="filter", action="store_const", const="all")
     ls.add_argument("--done", dest="filter", action="store_const", const="done")
     ls.add_argument("--open", dest="filter", action="store_const", const="open")
-    ls.add_argument("--pending", dest="filter", action="store_const", const="pending",
-                    help="rows captured locally but not yet delivered to Linear")
+    ls.add_argument(
+        "--pending",
+        dest="filter",
+        action="store_const",
+        const="pending",
+        help="rows captured locally but not yet delivered to Linear",
+    )
     ls.set_defaults(filter="open", func=cmd_ls)
 
     bk = sub.add_parser(
@@ -104,8 +123,8 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Examples:\n"
             "  todo plan idea-slug --project cockpit\n"
-            "  todo plan create --id plan-slug --title \"Plan\" --project cockpit --summary \"one-line\"\n"
-            "  todo plan execute plan-slug --summary \"what shipped\"\n"
+            '  todo plan create --id plan-slug --title "Plan" --project cockpit --summary "one-line"\n'
+            '  todo plan execute plan-slug --summary "what shipped"\n'
             "  todo plan status plan-slug"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -129,7 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="push pending tasks to Todoist (logseq target is frozen unless TODO_LOGSEQ_SYNC=1)",
     )
     s.add_argument(
-        "--target", choices=["all", "logseq", "linear", "todoist", "gtasks"], default="all",
+        "--target",
+        choices=["all", "logseq", "linear", "todoist", "gtasks"],
+        default="all",
         help="all = the active backend (+ frozen logseq); a retired backend target is refused",
     )
     s.set_defaults(func=cmd_sync)
@@ -160,27 +181,12 @@ def build_parser() -> argparse.ArgumentParser:
         "reconcile",
         help="pull status from remotes (mark local done if remote done)",
     )
-    rc.add_argument(
-        "--target", choices=["all", "logseq", "todoist"], default="all"
-    )
+    rc.add_argument("--target", choices=["all", "logseq", "todoist"], default="all")
     rc.set_defaults(func=cmd_reconcile)
 
-    nt = sub.add_parser(
-        "note", help="capture a free-form note into the Obsidian vault"
-    )
+    nt = sub.add_parser("note", help="capture a free-form note into the Obsidian vault")
     nt.add_argument("text", nargs="+")
     nt.set_defaults(func=cmd_note)
-
-    tg = sub.add_parser(
-        "telegram-poll",
-        help="poll the Telegram capture bot; file messages into the Obsidian vault",
-    )
-    tg.add_argument(
-        "--loop",
-        action="store_true",
-        help="run the long-poll daemon (launchd KeepAlive); default is one pass",
-    )
-    tg.set_defaults(func=cmd_telegram_poll)
 
     nf = sub.add_parser(
         "notify",
@@ -199,8 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="LABEL=VERB[:PAYLOAD]",
         help=(
-            "action button (repeatable); verbs: ack, add-task, idea-hot, "
-            "linear-complete, agent-*"
+            "action button (repeatable); verbs: ack, add-task, idea-hot, linear-complete, agent-*"
         ),
     )
     nf.add_argument("--thread", help="Slack thread ts to reply under")
@@ -241,8 +246,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     tr.set_defaults(func=cmd_transcribe)
 
-    la = sub.add_parser("linear-adopt", help="stamp migrated Todoist rows with their Linear issue (local file only)")
-    la.add_argument("--map", default=str(Path.home() / ".todo/exports/2026-09-17-linear-migration/source-to-linear-map.json"))
+    la = sub.add_parser(
+        "linear-adopt", help="stamp migrated Todoist rows with their Linear issue (local file only)"
+    )
+    la.add_argument(
+        "--map",
+        default=str(
+            Path.home() / ".todo/exports/2026-09-17-linear-migration/source-to-linear-map.json"
+        ),
+    )
     la.add_argument("--dry-run", action="store_true")
     la.set_defaults(func=cmd_linear_adopt)
 

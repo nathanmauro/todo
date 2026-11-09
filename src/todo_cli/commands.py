@@ -1,4 +1,5 @@
 """Subcommand handlers — one per CLI verb."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,13 +14,26 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import backlog, config, gtasks, linear, logseq, obsidian, plan, slack, telegram, todoist, transcribe as _transcribe_mod
+from . import (
+    actions,
+    backlog,
+    config,
+    gtasks,
+    linear,
+    logseq,
+    obsidian,
+    plan,
+    slack,
+    todoist,
+)
+from . import (
+    transcribe as _transcribe_mod,
+)
 from .config import (
     LOGSEQ_GRAPH,
     LOGSEQ_SYNC_ENABLED,
-    TELEGRAM_ENABLED,
-    TODOIST_PROJECT_ID,
     TODO_DIR,
+    TODOIST_PROJECT_ID,
     TODOS_FILE,
     mirror_policy,
 )
@@ -107,9 +121,7 @@ def _refresh_task_state(
     covered: set[str] = set()
     rc |= _run_quiet(todoist.mirror, entries, quiet=quiet, covered=covered)
     rc |= _run_quiet(logseq.reconcile, entries, quiet=quiet)
-    rc |= _run_quiet(
-        todoist.reconcile, entries, quiet=quiet, skip_project_ids=covered
-    )
+    rc |= _run_quiet(todoist.reconcile, entries, quiet=quiet, skip_project_ids=covered)
     write_all(entries)
     rc |= _sync_outbound(entries, quiet=quiet)
     write_all(entries)
@@ -126,12 +138,8 @@ def _audit_counts(entries: list[TodoEntry]) -> dict[str, int]:
         "open": len(open_rows),
         "done": len(done_rows),
         "origin_todoist": len([e for e in entries if e.origin == "todoist"]),
-        "open_local_missing_todoist": len(
-            [e for e in local_open if e.sync.todoist is None]
-        ),
-        "open_local_missing_logseq": len(
-            [e for e in local_open if e.sync.logseq is None]
-        ),
+        "open_local_missing_todoist": len([e for e in local_open if e.sync.todoist is None]),
+        "open_local_missing_logseq": len([e for e in local_open if e.sync.logseq is None]),
         "open_mirrored_missing_logseq_expected": len(
             [e for e in mirrored_open if e.sync.logseq is None]
         ),
@@ -146,8 +154,12 @@ def cmd_add(args: argparse.Namespace) -> int:
     if row_id and not re.fullmatch(r"[A-Za-z0-9._-]{8,64}", row_id):
         sys.exit("todo add: --id must be 8-64 chars of [A-Za-z0-9._-]")
     fields = dict(
-        text=text, source=args.source, due=args.due, project=args.project,
-        priority=getattr(args, "priority", None), dest=getattr(args, "dest", None),
+        text=text,
+        source=args.source,
+        due=args.due,
+        project=args.project,
+        priority=getattr(args, "priority", None),
+        dest=getattr(args, "dest", None),
         notes=getattr(args, "notes", None),
     )
     entry = TodoEntry(id=row_id, **fields) if row_id else TodoEntry(**fields)
@@ -208,10 +220,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
         ago = human_ago(e.ts)
         proj = (e.project or "-")[:proj_w]
         src = (e.source or "-")[:src_w]
-        line = (
-            f"{e.short_id}  [{mark}]  {ago:>10}  "
-            f"{proj:<{proj_w}}  {src:<{src_w}}  {e.text}"
-        )
+        line = f"{e.short_id}  [{mark}]  {ago:>10}  {proj:<{proj_w}}  {src:<{src_w}}  {e.text}"
         if e.due:
             line += f"  [due {e.due}]"
         if badges:
@@ -235,7 +244,20 @@ def cmd_backlog(args: argparse.Namespace) -> int:
         note = "todo backlog: Todoist board retired 2026-09-17 — use Linear project views (linear.app/nathanmauro)"
         project = getattr(args, "name", None) or getattr(args, "project", None)
         if getattr(args, "json_output", False) or getattr(args, "json", False):
-            print(json.dumps({"project": project, "retired": True, "note": note, "backlog": [], "planned": [], "in_flight": [], "tasks": [], "plans": []}))
+            print(
+                json.dumps(
+                    {
+                        "project": project,
+                        "retired": True,
+                        "note": note,
+                        "backlog": [],
+                        "planned": [],
+                        "in_flight": [],
+                        "tasks": [],
+                        "plans": [],
+                    }
+                )
+            )
         else:
             print(note)
         return 0
@@ -409,7 +431,9 @@ def cmd_linear_adopt(args: argparse.Namespace) -> int:
                 continue
             e.sync.linear = LinearSync(
                 issue_id=str(hit.get("uuid") or hit.get("identifier") or ""),
-                identifier=hit.get("identifier"), url=hit.get("url"), ts=now_iso(),
+                identifier=hit.get("identifier"),
+                url=hit.get("url"),
+                ts=now_iso(),
                 # Linear's state as migrated is authoritative. A row that is already `done`
                 # locally (a stale completion that never reached Todoist, or one Todoist later
                 # reopened) must NOT be replayed as a fresh completion by the next refresh, so
@@ -511,7 +535,10 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             print(f"todo reconcile: {exc}", file=sys.stderr)
             return 2
         if args.target == "todoist" and backend != "todoist":
-            print(f"todo reconcile: --target todoist is retired under backend={backend}; nothing sent", file=sys.stderr)
+            print(
+                f"todo reconcile: --target todoist is retired under backend={backend}; nothing sent",
+                file=sys.stderr,
+            )
             return 2
         if args.target in ("all", "todoist") and backend == "todoist":
             rc |= todoist.reconcile(entries)
@@ -526,14 +553,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
     print(f"  open: {counts['open']}")
     print(f"  done: {counts['done']}")
     print(f"  origin_todoist: {counts['origin_todoist']}")
-    print(
-        "  open_local_missing_todoist: "
-        f"{counts['open_local_missing_todoist']}"
-    )
-    print(
-        "  open_local_missing_logseq: "
-        f"{counts['open_local_missing_logseq']}"
-    )
+    print(f"  open_local_missing_todoist: {counts['open_local_missing_todoist']}")
+    print(f"  open_local_missing_logseq: {counts['open_local_missing_logseq']}")
     print(
         "  open_mirrored_missing_logseq_expected: "
         f"{counts['open_mirrored_missing_logseq_expected']}"
@@ -545,7 +566,7 @@ def cmd_note(args: argparse.Namespace) -> int:
     """Capture a free-form note into the Obsidian vault (canonical store).
 
     Writes one Markdown file under <vault>/captures/YYYY-MM-DD/ — the same lane
-    the Telegram bot uses — instead of the (now frozen) Logseq journal.
+    the Slack listener uses — instead of the (now frozen) Logseq journal.
     """
     text = " ".join(args.text).strip()
     if not text:
@@ -559,10 +580,10 @@ def _parse_button(spec: str) -> tuple[str, str, str]:
     """Parse one --button spec: 'Label=verb[:payload]' (closed verb set)."""
     label, sep, rest = spec.partition("=")
     verb, _, payload = rest.partition(":")
-    if not sep or not label.strip() or (verb not in telegram.ACTION_VERBS and not verb.startswith("agent-")):
+    if not sep or not label.strip() or not actions.valid_verb(verb):
         sys.exit(
             f"bad --button {spec!r}; expected 'Label=verb[:payload]' with verb in "
-            f"{sorted(telegram.ACTION_VERBS)} or starting with 'agent-'"
+            f"{sorted(actions.ACTION_VERBS)} or starting with 'agent-'"
         )
     return (label.strip(), verb, payload)
 
@@ -626,38 +647,10 @@ def cmd_slack_doctor(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
-def cmd_telegram_poll(args: argparse.Namespace) -> int:
-    """Poll the Telegram capture bot and file messages into the Obsidian vault.
-
-    `--loop` runs the long-poll daemon (launchd KeepAlive); the default single
-    pass is handy for testing and for grabbing your chat_id from the bot's reply.
-    """
-    if not TELEGRAM_ENABLED:
-        print("telegram: disabled (TODO_TELEGRAM=0)")
-        return 0
-    if args.loop:
-        # poll_loop idles until a token appears, so the daemon can be loaded
-        # before the BotFather token is stored (it activates with no reload).
-        return telegram.poll_loop()
-    if not telegram.token():
-        print(
-            "telegram: no token — store one:\n"
-            "  security add-generic-password -a telegram -s todo-cli -w "
-            "'<BOTFATHER_TOKEN>'"
-        )
-        return 1
-    n = telegram.poll_once()
-    print(f"telegram: filed {n} capture(s) into the vault")
-    return 0
-
-
 def cmd_doctor(args: argparse.Namespace) -> int:
     ok = True
     print(f"store dir: {TODO_DIR}  {'OK' if TODO_DIR.exists() else 'MISSING'}")
-    print(
-        f"todos file: {TODOS_FILE}  "
-        f"{'OK' if TODOS_FILE.exists() else 'MISSING'}"
-    )
+    print(f"todos file: {TODOS_FILE}  {'OK' if TODOS_FILE.exists() else 'MISSING'}")
     vault = obsidian.captures_root()
     print(
         f"obsidian captures: {vault}  "
@@ -675,11 +668,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if not tok:
         ok = False
     print(f"todoist project: {TODOIST_PROJECT_ID}")
-    ttok = telegram.token()
-    print(f"telegram token: {'OK (keychain or env)' if ttok else 'MISSING (bot idle)'}")
+    # Presence only; `todo slack-doctor` checks token type, routes and auth.
+    stok = slack.bot_token()
     print(
-        f"telegram chat: {telegram.last_chat_id() or 'none yet (message the bot once)'}"
+        f"slack bot token: {'OK (keychain or env)' if stok else 'MISSING (notify and capture idle)'}"
+        "  (details: todo slack-doctor)"
     )
+    print(f"actions dir: {actions.ACTIONS_DIR}")
     pol = mirror_policy()
     print(
         f"mirror policy: exclude_shared={pol['exclude_shared']} "

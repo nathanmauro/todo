@@ -1,5 +1,6 @@
 """Hardening for unattended interval refresh: lock, quarantine, narrowed
 reconcile, and ls coherence for mirrored rows."""
+
 from __future__ import annotations
 
 import argparse
@@ -7,12 +8,10 @@ import fcntl
 from unittest.mock import MagicMock
 
 import pytest
-
 from todo_cli import commands, storage, todoist
 from todo_cli.formatting import sync_badges
 from todo_cli.models import TodoEntry, TodoistSync
 from todo_cli.storage import file_lock, load_all, write_all
-
 
 # --- quarantine ---------------------------------------------------------------
 
@@ -104,9 +103,7 @@ def test_reconcile_skips_only_sweep_covered_mirrored_rows(monkeypatch):
         lambda tok, tid: fetched.append(tid) or {"checked": False},
     )
 
-    rc = todoist.reconcile(
-        [covered_row, out_of_scope, local], skip_project_ids={"P1"}
-    )
+    rc = todoist.reconcile([covered_row, out_of_scope, local], skip_project_ids={"P1"})
     assert rc == 0
     # T1 was judged by mirror's sweep; T2's project left mirror scope, so the
     # per-task fetch is its ONLY completion path; T3 is local-origin.
@@ -170,20 +167,17 @@ def test_ls_shows_due_date(capsys):
     assert "[due 2026-06-12]" in capsys.readouterr().out
 
 
-# --- telegram push uses the lock ----------------------------------------------
+# --- capture push uses the lock -----------------------------------------------
 
 
-def test_telegram_push_task_holds_lock(monkeypatch):
-
+def test_capture_push_task_holds_lock(monkeypatch):
 
     monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
-    from todo_cli import telegram
+    from todo_cli import capture
 
-    monkeypatch.setattr(telegram.todoist, "token", lambda: "tok")
-    monkeypatch.setattr(telegram.todoist, "ensure_label", lambda *a, **k: None)
-    monkeypatch.setattr(
-        telegram.todoist, "create_task", lambda *a, **k: {"id": "T77"}
-    )
+    monkeypatch.setattr(capture.todoist, "token", lambda: "tok")
+    monkeypatch.setattr(capture.todoist, "ensure_label", lambda *a, **k: None)
+    monkeypatch.setattr(capture.todoist, "create_task", lambda *a, **k: {"id": "T77"})
     locked: list[bool] = []
     real_lock = storage.file_lock
 
@@ -191,33 +185,30 @@ def test_telegram_push_task_holds_lock(monkeypatch):
         locked.append(True)
         return real_lock(*a, **k)
 
-    monkeypatch.setattr(telegram, "file_lock", spying_lock)
+    monkeypatch.setattr(capture, "file_lock", spying_lock)
 
-    assert telegram._push_task("buy milk") is True
+    assert capture.push_task("buy milk", "slack") is True
     assert locked == [True]
     [entry] = load_all()
     assert entry.text == "buy milk"
     assert entry.sync.todoist.task_id == "T77"
 
 
-def test_telegram_push_task_adopts_already_mirrored_row(monkeypatch):
-
+def test_capture_push_task_adopts_already_mirrored_row(monkeypatch):
 
     monkeypatch.setenv("TODO_TASK_BACKEND", "todoist")  # legacy Todoist lane under test
     """If a refresh mirrored the just-created task while _push_task waited on
     the lock, the mirrored row is the record — no duplicate append."""
-    from todo_cli import telegram
+    from todo_cli import capture
 
-    monkeypatch.setattr(telegram.todoist, "token", lambda: "tok")
-    monkeypatch.setattr(telegram.todoist, "ensure_label", lambda *a, **k: None)
-    monkeypatch.setattr(
-        telegram.todoist, "create_task", lambda *a, **k: {"id": "T77"}
-    )
+    monkeypatch.setattr(capture.todoist, "token", lambda: "tok")
+    monkeypatch.setattr(capture.todoist, "ensure_label", lambda *a, **k: None)
+    monkeypatch.setattr(capture.todoist, "create_task", lambda *a, **k: {"id": "T77"})
     mirrored = TodoEntry(text="buy milk", origin="todoist", source="telegram")
     mirrored.sync.todoist = TodoistSync(task_id="T77", ts="x")
     write_all([mirrored])
 
-    assert telegram._push_task("buy milk") is True
+    assert capture.push_task("buy milk", "slack") is True
     entries = load_all()
     assert len(entries) == 1  # adopted, not duplicated
     assert entries[0].origin == "todoist"
@@ -299,9 +290,7 @@ def test_mirror_update_skips_rederive_when_taxonomy_degraded(monkeypatch):
         "taxonomy_labels",
         lambda: {"source": [], "projects": [], "areas": []},
     )
-    monkeypatch.setattr(
-        todoist, "list_projects", lambda tok: [{"id": "P1", "is_shared": False}]
-    )
+    monkeypatch.setattr(todoist, "list_projects", lambda tok: [{"id": "P1", "is_shared": False}])
     monkeypatch.setattr(
         todoist,
         "list_active_tasks",

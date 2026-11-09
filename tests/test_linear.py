@@ -2,10 +2,11 @@
 
 Fake transport only (linear._graphql is monkeypatched). Pins: fail-closed without a key,
 no fallback to Todoist/Google Tasks, idempotent create via capture-id lookup, alias and
-unknown-project routing, lossless long titles and timed dues, the telegram +t lane, the
+unknown-project routing, lossless long titles and timed dues, the +t capture lane, the
 linear-complete button verb, and command routing (done / refresh / pull) under the
 linear backend.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -13,28 +14,44 @@ import json
 from unittest.mock import MagicMock
 
 import pytest
-
-from todo_cli import commands, linear, telegram, todoist
+from todo_cli import actions, capture, commands, linear, todoist
 from todo_cli.models import LinearSync, TodoEntry, TodoistSync
 from todo_cli.storage import load_all, write_all
 
 TEAM = {"teams": {"nodes": [{"id": "team-1", "key": "NAT", "name": "Nathanmauro"}]}}
-STATES = {"team": {"states": {"nodes": [
-    {"id": "st-backlog", "name": "Backlog", "type": "backlog"},
-    {"id": "st-todo", "name": "Todo", "type": "unstarted"},
-    {"id": "st-prog", "name": "In Progress", "type": "started"},
-    {"id": "st-done", "name": "Done", "type": "completed"},
-]}}}
-PROJECTS = {"team": {"projects": {"nodes": [
-    {"id": "p-personal", "name": "Personal"},
-    {"id": "p-blackbox", "name": "Black Box"},
-    {"id": "p-todo", "name": "Todo CLI & Telegram"},
-    {"id": "p-career", "name": "Career Launchpad"},
-    {"id": "p-cockpit", "name": "Cockpit"},
-]}}}
-LABELS = {"issueLabels": {"nodes": [
-    {"id": "l-capture", "name": "capture"}, {"id": "l-idea", "name": "idea"},
-]}}
+STATES = {
+    "team": {
+        "states": {
+            "nodes": [
+                {"id": "st-backlog", "name": "Backlog", "type": "backlog"},
+                {"id": "st-todo", "name": "Todo", "type": "unstarted"},
+                {"id": "st-prog", "name": "In Progress", "type": "started"},
+                {"id": "st-done", "name": "Done", "type": "completed"},
+            ]
+        }
+    }
+}
+PROJECTS = {
+    "team": {
+        "projects": {
+            "nodes": [
+                {"id": "p-personal", "name": "Personal"},
+                {"id": "p-blackbox", "name": "Black Box"},
+                {"id": "p-todo", "name": "Todo CLI & Telegram"},
+                {"id": "p-career", "name": "Career Launchpad"},
+                {"id": "p-cockpit", "name": "Cockpit"},
+            ]
+        }
+    }
+}
+LABELS = {
+    "issueLabels": {
+        "nodes": [
+            {"id": "l-capture", "name": "capture"},
+            {"id": "l-idea", "name": "idea"},
+        ]
+    }
+}
 
 
 class FakeLinear:
@@ -69,7 +86,11 @@ class FakeLinear:
         if "issueCreate" in query:
             inp = variables["input"]
             n = len(self.created) + 1
-            issue = {"id": inp.get("id") or f"uuid-{n}", "identifier": f"NAT-{900 + n}", "url": f"https://linear.app/x/NAT-{900 + n}"}
+            issue = {
+                "id": inp.get("id") or f"uuid-{n}",
+                "identifier": f"NAT-{900 + n}",
+                "url": f"https://linear.app/x/NAT-{900 + n}",
+            }
             self.created.append(inp)
             cid = inp["description"].rsplit("capture-id: ", 1)[-1].rstrip("_ \n")
             self.existing[cid] = issue
@@ -101,13 +122,19 @@ def fake(monkeypatch):
 
 # --- transport / auth --------------------------------------------------------
 
+
 def test_graphql_sends_bare_personal_key_header(monkeypatch):
     seen = {}
 
     class Resp:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def read(self): return json.dumps({"data": {"ok": 1}}).encode()
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"data": {"ok": 1}}).encode()
 
     def fake_urlopen(req, timeout=0):
         seen["auth"] = req.get_header("Authorization")
@@ -117,7 +144,7 @@ def test_graphql_sends_bare_personal_key_header(monkeypatch):
     monkeypatch.setattr(linear.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(linear.json, "load", lambda fh: json.loads(fh.read()))
     assert linear._graphql("query{ ok }") == {"ok": 1}
-    assert seen["auth"] == "lin_test_key"          # no "Bearer " prefix for personal keys
+    assert seen["auth"] == "lin_test_key"  # no "Bearer " prefix for personal keys
     assert seen["body"]["query"] == "query{ ok }"
 
 
@@ -127,11 +154,12 @@ def test_no_key_fails_closed_and_keeps_row(monkeypatch, fake):
     entries = [TodoEntry(text="keep me", source="cli")]
     assert linear.sync(entries, quiet=True) == 1
     assert entries[0].sync.linear is None
-    assert fake.created == []                      # nothing sent anywhere
+    assert fake.created == []  # nothing sent anywhere
     assert entries[0].sync.todoist is None and entries[0].sync.gtasks is None
 
 
 # --- create semantics --------------------------------------------------------
+
 
 def test_sync_creates_with_capture_id_and_is_idempotent(fake):
     entries = [TodoEntry(text="push me", source="cli", due="2026-09-20")]
@@ -182,7 +210,13 @@ def test_project_alias_and_exact_name(fake):
         TodoEntry(text="e"),
     ]
     assert linear.sync(rows, quiet=True) == 0
-    assert [i["projectId"] for i in fake.created] == ["p-blackbox", "p-todo", "p-career", "p-blackbox", "p-personal"]
+    assert [i["projectId"] for i in fake.created] == [
+        "p-blackbox",
+        "p-todo",
+        "p-career",
+        "p-blackbox",
+        "p-personal",
+    ]
 
 
 def test_unknown_project_queues_with_routing_error(fake):
@@ -206,7 +240,7 @@ def test_long_title_and_timed_due_are_preserved(fake):
     assert linear.sync([row], quiet=True) == 0
     inp = fake.created[0]
     assert len(inp["title"]) == 255 and inp["title"].endswith("…")
-    assert text in inp["description"]              # full capture kept
+    assert text in inp["description"]  # full capture kept
     assert inp["dueDate"] == "2026-09-18"
     assert "`2026-09-18T09:00:00`" in inp["description"] and "date-only" in inp["description"]
     assert inp["priority"] == 2 and inp["stateId"] == "st-backlog"
@@ -221,10 +255,11 @@ def test_completions_pushed_once(fake):
     assert linear.push_completions([row]) == (0, 0)
 
 
-# --- telegram +t lane --------------------------------------------------------
+# --- +t capture lane ----------------------------------------------------------
+
 
 def test_push_task_linear_success_stamps(fake):
-    assert telegram._push_task("buy milk", source="telegram") is True
+    assert capture.push_task("buy milk", "slack") is True
     [row] = load_all()
     assert row.sync.linear.identifier == "NAT-901" and row.sync.todoist is None
     assert f"capture-id: {row.id}" in fake.created[0]["description"]
@@ -232,7 +267,7 @@ def test_push_task_linear_success_stamps(fake):
 
 def test_push_task_linear_fail_closed_no_key(monkeypatch, fake):
     monkeypatch.setattr(linear, "token", lambda: None)
-    assert telegram._push_task("do not lose me", source="telegram") is False
+    assert capture.push_task("do not lose me", "slack") is False
     [row] = load_all()
     assert row.text == "do not lose me" and row.sync.linear is None
     assert fake.created == []
@@ -247,31 +282,34 @@ def test_push_task_never_falls_back_to_todoist(monkeypatch, fake):
     monkeypatch.setattr(linear, "create_issue", MagicMock(side_effect=linear.LinearError("boom")))
     todoist_create = MagicMock()
     monkeypatch.setattr(todoist, "create_task", todoist_create)
-    assert telegram._push_task("x", source="telegram") is False
+    assert capture.push_task("x", "slack") is False
     assert todoist_create.call_count == 0
 
 
 def test_backend_name_and_verb():
-    assert telegram._task_backend_name() == "Linear"
-    assert "linear-complete" in telegram.ACTION_VERBS
+    assert capture.task_backend_name() == "Linear"
+    assert "linear-complete" in actions.ACTION_VERBS
 
 
 def test_linear_complete_flips_local_row(fake):
     row = TodoEntry(text="tap me")
     row.sync.linear = LinearSync(issue_id="uuid-3", identifier="NAT-3", ts="x")
     write_all([row])
-    assert telegram._execute_action({"verb": "linear-complete", "payload": "NAT-3"}) == "done ✓"
+    assert (
+        actions.execute({"verb": "linear-complete", "payload": "NAT-3"}, source="slack") == "done ✓"
+    )
     assert fake.completed == ["NAT-3"]
     [back] = load_all()
     assert back.status == "done" and back.sync.linear.closed_ts
 
 
 def test_linear_complete_bad_payload(fake):
-    assert telegram._linear_complete("bad payload!") == "bad linear payload"
+    assert actions._linear_complete("bad payload!", "slack") == "bad linear payload"
     assert fake.completed == []
 
 
 # --- command routing ---------------------------------------------------------
+
 
 def test_cmd_done_routes_completion_to_linear(monkeypatch, fake):
     row = TodoEntry(text="close me")
@@ -304,8 +342,16 @@ def test_pull_is_noop_under_linear(monkeypatch, capsys):
 
 
 def test_add_carries_priority_dest_project(monkeypatch, fake):
-    args = argparse.Namespace(text=["ship", "it"], source="codex", due=None, project="cockpit",
-                              priority="p1", dest="current", notes="Queued by codex\nQueue file: q.json", no_sync=False)
+    args = argparse.Namespace(
+        text=["ship", "it"],
+        source="codex",
+        due=None,
+        project="cockpit",
+        priority="p1",
+        dest="current",
+        notes="Queued by codex\nQueue file: q.json",
+        no_sync=False,
+    )
     assert commands.cmd_add(args) == 0
     [row] = load_all()
     assert row.priority == "p1" and row.dest == "current" and row.project == "cockpit"
@@ -316,21 +362,38 @@ def test_add_carries_priority_dest_project(monkeypatch, fake):
 
 # --- hardening: stable ids, races, retired targets, unknown backend, legacy verbs, adoption, views ---
 
+
 def test_create_input_carries_deterministic_issue_id(fake):
     row = TodoEntry(text="stable")
     assert linear.sync([row], quiet=True) == 0
     assert fake.created[0]["id"] == linear.issue_uuid(row.id)
     assert fake.created[0]["id"] == linear.issue_uuid(row.id)  # deterministic
     import uuid as _uuid
+
     u = _uuid.UUID(fake.created[0]["id"])
-    assert u.version == 4 and u.variant == _uuid.RFC_4122   # Linear validates client ids as v4
+    assert u.version == 4 and u.variant == _uuid.RFC_4122  # Linear validates client ids as v4
 
 
 def test_graphql_error_includes_extensions_detail(monkeypatch):
     class Resp:
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-        def read(self): return json.dumps({"errors": [{"message": "Argument Validation Error", "extensions": {"userPresentableMessage": "id must be a UUID v4"}}]}).encode()
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "errors": [
+                        {
+                            "message": "Argument Validation Error",
+                            "extensions": {"userPresentableMessage": "id must be a UUID v4"},
+                        }
+                    ]
+                }
+            ).encode()
+
     monkeypatch.setattr(linear.urllib.request, "urlopen", lambda req, timeout=0: Resp())
     monkeypatch.setattr(linear.json, "load", lambda fh: json.loads(fh.read()))
     with pytest.raises(linear.LinearError) as exc:
@@ -363,7 +426,9 @@ def test_overlapping_create_adopts_by_id(monkeypatch):
 
 
 def test_sync_refuses_retired_targets_under_linear(monkeypatch, fake, capsys):
-    monkeypatch.setattr(todoist, "sync", MagicMock(side_effect=AssertionError("Todoist must not be called")))
+    monkeypatch.setattr(
+        todoist, "sync", MagicMock(side_effect=AssertionError("Todoist must not be called"))
+    )
     write_all([TodoEntry(text="x")])
     assert commands.cmd_sync(argparse.Namespace(target="todoist")) == 2
     assert "retired" in capsys.readouterr().err
@@ -373,24 +438,32 @@ def test_sync_refuses_retired_targets_under_linear(monkeypatch, fake, capsys):
 
 def test_unknown_backend_fails_closed(monkeypatch, fake, capsys):
     monkeypatch.setenv("TODO_TASK_BACKEND", "linera")
-    monkeypatch.setattr(todoist, "sync", MagicMock(side_effect=AssertionError("Todoist must not be called")))
+    monkeypatch.setattr(
+        todoist, "sync", MagicMock(side_effect=AssertionError("Todoist must not be called"))
+    )
     write_all([TodoEntry(text="x")])
     assert commands.cmd_sync(argparse.Namespace(target="all")) == 2
     assert "not a known backend" in capsys.readouterr().err
     assert fake.created == []
     tc = MagicMock()
     monkeypatch.setattr(todoist, "create_task", tc)
-    assert telegram._push_task("typo backend", source="telegram") is False
+    assert capture.push_task("typo backend", "slack") is False
     assert tc.call_count == 0 and fake.created == []
 
 
 def test_legacy_complete_verbs_refused_under_linear(monkeypatch, fake):
     from todo_cli import gtasks
-    td = MagicMock(); gt = MagicMock()
+
+    td = MagicMock()
+    gt = MagicMock()
     monkeypatch.setattr(todoist, "push_completions", td)
     monkeypatch.setattr(gtasks, "complete_task", gt)
-    assert "retired" in telegram._execute_action({"verb": "todoist-complete", "payload": "abcdef12"})
-    assert "retired" in telegram._execute_action({"verb": "gtasks-complete", "payload": "L1:G9"})
+    assert "retired" in actions.execute(
+        {"verb": "todoist-complete", "payload": "abcdef12"}, source="slack"
+    )
+    assert "retired" in actions.execute(
+        {"verb": "gtasks-complete", "payload": "L1:G9"}, source="slack"
+    )
     assert td.call_count == 0 and gt.call_count == 0 and fake.completed == []
 
 
@@ -402,12 +475,26 @@ def test_linear_adopt_stamps_migrated_rows(tmp_path, fake, capsys):
     local = TodoEntry(text="local capture")
     write_all([mirrored, orphan, local])
     m = tmp_path / "map.json"
-    m.write_text(json.dumps({"issues": {"todoist:6TESTFINANCE0001": {"identifier": "NAT-99", "uuid": "9765-uuid", "url": "https://linear.app/x/NAT-99"}}}))
+    m.write_text(
+        json.dumps(
+            {
+                "issues": {
+                    "todoist:6TESTFINANCE0001": {
+                        "identifier": "NAT-99",
+                        "uuid": "9765-uuid",
+                        "url": "https://linear.app/x/NAT-99",
+                    }
+                }
+            }
+        )
+    )
     assert commands.cmd_linear_adopt(argparse.Namespace(map=str(m), dry_run=True)) == 0
     assert load_all()[0].sync.linear is None  # dry-run wrote nothing
     assert commands.cmd_linear_adopt(argparse.Namespace(map=str(m), dry_run=False)) == 0
     rows = load_all()
-    assert rows[0].sync.linear.issue_id == "9765-uuid" and rows[0].sync.linear.identifier == "NAT-99"
+    assert (
+        rows[0].sync.linear.issue_id == "9765-uuid" and rows[0].sync.linear.identifier == "NAT-99"
+    )
     assert rows[1].sync.linear is None and rows[2].sync.linear is None
     assert "adopted 1" in capsys.readouterr().out
     # now `todo done` on the migrated row closes the Linear issue
@@ -426,28 +513,50 @@ def test_done_without_linear_link_says_so(fake, capsys):
 
 def test_ls_pending_and_backlog_retired(fake, capsys, monkeypatch):
     queued = TodoEntry(text="queued")
-    pushed = TodoEntry(text="pushed"); pushed.sync.linear = LinearSync(issue_id="u", identifier="NAT-1", ts="x")
-    mirrored = TodoEntry(text="mirror", origin="todoist"); mirrored.sync.todoist = TodoistSync(task_id="T", ts="x")
+    pushed = TodoEntry(text="pushed")
+    pushed.sync.linear = LinearSync(issue_id="u", identifier="NAT-1", ts="x")
+    mirrored = TodoEntry(text="mirror", origin="todoist")
+    mirrored.sync.todoist = TodoistSync(task_id="T", ts="x")
     write_all([queued, pushed, mirrored])
     assert commands.cmd_ls(argparse.Namespace(filter="pending")) == 0
     cap = capsys.readouterr()
     assert "queued" in cap.out and "pushed" not in cap.out and "mirror" not in cap.out
     assert "1 row(s) pending delivery" in cap.err
-    assert commands.cmd_backlog(argparse.Namespace(name="cockpit", json_output=True, if_project=False)) == 0
+    assert (
+        commands.cmd_backlog(argparse.Namespace(name="cockpit", json_output=True, if_project=False))
+        == 0
+    )
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert payload["retired"] is True and payload["project"] == "cockpit"
     # the real argparse surface, end to end
     import sys as _sys
+
     from todo_cli.cli import main as cli_main
+
     monkeypatch.setattr(_sys, "argv", ["todo", "backlog", "cockpit", "--json"])
     assert cli_main() == 0
     assert json.loads(capsys.readouterr().out.strip().splitlines()[-1])["retired"] is True
 
 
 def test_add_with_stable_id_is_idempotent(fake):
-    args = dict(text=["from", "queue"], source="codex", due=None, project=None, priority=None, dest=None, notes=None, no_sync=False)
-    assert commands.cmd_add(argparse.Namespace(row_id="f66d1de6-1080-4c34-86c6-6b2f9e1acf4b", **args)) == 0
-    assert commands.cmd_add(argparse.Namespace(row_id="f66d1de6-1080-4c34-86c6-6b2f9e1acf4b", **args)) == 0
+    args = dict(
+        text=["from", "queue"],
+        source="codex",
+        due=None,
+        project=None,
+        priority=None,
+        dest=None,
+        notes=None,
+        no_sync=False,
+    )
+    assert (
+        commands.cmd_add(argparse.Namespace(row_id="f66d1de6-1080-4c34-86c6-6b2f9e1acf4b", **args))
+        == 0
+    )
+    assert (
+        commands.cmd_add(argparse.Namespace(row_id="f66d1de6-1080-4c34-86c6-6b2f9e1acf4b", **args))
+        == 0
+    )
     rows = load_all()
     assert len(rows) == 1 and rows[0].id == "f66d1de6-1080-4c34-86c6-6b2f9e1acf4b"
     assert len(fake.created) == 1 and fake.created[0]["id"] == linear.issue_uuid(rows[0].id)
@@ -455,14 +564,34 @@ def test_add_with_stable_id_is_idempotent(fake):
 
 def test_linear_adopt_never_replays_stale_local_completion(tmp_path, fake):
     """A row done locally (June) whose Linear issue is deliberately Todo must not be closed by adoption+refresh."""
-    stale = TodoEntry(text="Rework /jaws", origin="todoist", status="done", done_ts="2026-06-10T00:00:00", done_source="local")
+    stale = TodoEntry(
+        text="Rework /jaws",
+        origin="todoist",
+        status="done",
+        done_ts="2026-06-10T00:00:00",
+        done_source="local",
+    )
     stale.sync.todoist = TodoistSync(task_id="6TESTJAWS0000001", ts="x")
     write_all([stale])
     m = tmp_path / "map.json"
-    m.write_text(json.dumps({"issues": {"todoist:6TESTJAWS0000001": {"identifier": "NAT-85", "uuid": "nat85-uuid", "url": "u"}}}))
+    m.write_text(
+        json.dumps(
+            {
+                "issues": {
+                    "todoist:6TESTJAWS0000001": {
+                        "identifier": "NAT-85",
+                        "uuid": "nat85-uuid",
+                        "url": "u",
+                    }
+                }
+            }
+        )
+    )
     assert commands.cmd_linear_adopt(argparse.Namespace(map=str(m), dry_run=False)) == 0
     [row] = load_all()
-    assert row.sync.linear.identifier == "NAT-85" and row.sync.linear.closed_ts  # already reconciled
+    assert (
+        row.sync.linear.identifier == "NAT-85" and row.sync.linear.closed_ts
+    )  # already reconciled
     assert linear.completion_candidates([row]) == []
     assert commands.cmd_refresh(argparse.Namespace(dry_run=False)) == 0
-    assert fake.completed == []                    # NAT-85 untouched
+    assert fake.completed == []  # NAT-85 untouched
