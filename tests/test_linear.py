@@ -37,7 +37,7 @@ PROJECTS = {
             "nodes": [
                 {"id": "p-personal", "name": "Personal"},
                 {"id": "p-blackbox", "name": "Black Box"},
-                {"id": "p-todo", "name": "Todo CLI & Telegram"},
+                {"id": "p-todo", "name": "Todo CLI & Capture"},
                 {"id": "p-career", "name": "Career Launchpad"},
                 {"id": "p-cockpit", "name": "Cockpit"},
             ]
