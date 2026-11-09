@@ -1,12 +1,13 @@
 # Android quick-capture → Notion Capture Inbox
 
-> **⚠️ SUPERSEDED 2026-06-01 → Telegram → Obsidian.**
+> **⚠️ SUPERSEDED 2026-06-01. The live mobile front door is Slack → Obsidian.**
 > This flow (Android HTTP Shortcut → Notion Capture Inbox → Logseq drain) is
 > **retired**. Notion is now read-only reference and Logseq is a frozen archive;
 > the `notion-sync` drain, the PARA classifier, and the Notion producer were
-> removed from the `todo` CLI. The live mobile front door is the **Telegram bot
-> → Obsidian vault** — see [`telegram-capture.md`](telegram-capture.md). This
-> file is kept only as historical reference for the old Notion REST recipe.
+> removed from the `todo` CLI. A Telegram bot replaced it and has since been
+> retired too; the live mobile front door is the **Slack app → Obsidian vault**,
+> see [`slack-capture.md`](slack-capture.md). This file is kept only as historical
+> reference for the old Notion REST recipe.
 
 One-tap capture from an Android phone into the Notion **Capture Inbox** database.
 The `logseq-notion-sync` launchd agent on `in8-mac` then drains new rows every 15
@@ -19,8 +20,8 @@ idempotent (server `Synced` flag + an `nx` marker + a `~/.notion-sync/filed.json
 ledger). Once pulled, **Logseq owns the item** — editing the synced row in Notion
 does not re-sync.
 
-> A voice/text **Telegram** lane feeds the same Capture Inbox — see
-> `telegram-capture.md`. Preview placement without writing: `todo notion-sync --dry-run`.
+> A voice/text Telegram lane (also retired) fed the same Capture Inbox.
+> Preview placement without writing: `todo notion-sync --dry-run`.
 
 This is the interim capture surface until the `android-capture-bubble` app
 (Notion project `365b9be9-bd58-8171-97d0-d90c6d64748e`) ships.

@@ -1,29 +1,32 @@
-# Slack capture and notifications (replaces Telegram)
+# Slack capture and notifications
 
 Slack is the messaging transport; Linear stays the task system, Obsidian the note
 store, Black Box the agent record. `src/todo_cli/slack.py` owns the wire; the
-classifier, Obsidian writer, Linear push, and action executor are shared with the
-Telegram lane until it is retired.
+classifier and Linear push (`capture.py`), the Obsidian writer (`obsidian.py`),
+and the action registry and executor (`actions.py`) are transport-neutral.
+Slack replaced the Telegram bot, which is retired.
 
 ## Pieces
 
 - `todo slack-listen` — Socket Mode daemon (`launchd/com.nathan.slack-capture.plist`).
-  Outbound websocket only, so no public endpoint. Messages in the `capture` channel
-  or the bot DM become one capture under `captures/YYYY-MM-DD/<HHMMSS>-slack-<id>.md`;
-  `+t` / `+i` prefixes work as on Telegram. Files land in `Attachments/slack/`;
+  Outbound websocket only, so no public endpoint. Every human message the bot can
+  see becomes one capture under `captures/YYYY-MM-DD/<HHMMSS>-slack-<id>.md`;
+  a `+t` prefix also pushes a task to Linear, `+i` files an idea. Files land in
+  `Attachments/slack/`;
   voice clips are transcribed locally (Parakeet, whisper.cpp fallback). The bot
   replies in thread `filed ✓ <kind>` with an Obsidian link.
-- Buttons — `todo notify --button Label=verb[:payload]` registers the same action
-  records under `~/.todo/telegram-actions/` that Job Scout reads; a click executes
-  once and collapses the buttons. `agent-*` verbs need `SLACK_ALLOWED_USER_ID`.
+- Buttons — `todo notify --button Label=verb[:payload]` registers an action record
+  under `~/.todo/actions/` (`TODO_ACTIONS`), the directory Job Scout also reads; a
+  click executes once and collapses the buttons. Verbs: `ack`, `add-task`,
+  `idea-hot`, `linear-complete`, and `agent-*` (handed to the bridge). `agent-*` verbs need `SLACK_ALLOWED_USER_ID`.
 - Slash commands — `/cc`, `/cc-sessions`, `/cc-kill` (mapped to the bridge's `/claude`, `/sessions`, `/kill`) go to `TODO_AGENT_BRIDGE_CMD`
   (Cockpit's `cockpit-remote-fire`) with the channel id as `--chat-id`.
-- `todo notify [--route R] [--button …] [--thread TS] text` — the transport-neutral
-  sender. The wire (`telegram|slack|both`, default `telegram`) comes from the
-  one-word file `~/.todo/notify-transport`; `TODO_NOTIFY_TRANSPORT` overrides it
-  for one run. `todo telegram-send` is now an alias for `notify --route default`,
-  so writing the file moves every unmigrated producer at once.
-  `todo notify --check --route R` prints `ready` or problem codes.
+- `todo notify [--route R] [--button …] [--thread TS] text` — the only send verb.
+  It prints `slack: sent to route R ts <ts>` and exits 0, or exits 1 when Slack did
+  not take the message. `todo notify --check --route R` prints `ready` or the
+  problem codes `slack-token-missing` / `slack-route-unmapped`. The old
+  `TODO_NOTIFY_TRANSPORT` variable and `~/.todo/notify-transport` file are no
+  longer read.
 - `todo slack-doctor` — read-only: tokens present, routes, user lock, `auth.test`,
   last recorded send/listen error.
 

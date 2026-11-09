@@ -5,11 +5,11 @@ Parakeet fails or returns nothing, the same audio falls back to whisper.cpp.
 An explicit whisper model (``model=`` / ``todo transcribe --model``) forces
 whisper.cpp.
 
-Shared by the Telegram voice-note pipeline (telegram.py) and the CLI
-`todo transcribe` verb (commands.py). The Telegram path is a pure refactor —
-no behaviour change. The CLI verb adds file-mtime-as-created, model auto-
-selection, and optional SRT output.
+Shared by the Slack voice-clip pipeline (slack.py) and the CLI
+`todo transcribe` verb (commands.py). The CLI verb adds file-mtime-as-created,
+model auto-selection, and optional SRT output.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -43,12 +43,18 @@ def audio_duration(audio: Path) -> float | None:
     try:
         r = subprocess.run(
             [
-                "ffprobe", "-v", "quiet",
-                "-show_entries", "format=duration",
-                "-of", "csv=p=0",
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
                 str(audio),
             ],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return float(r.stdout.strip())
     except (subprocess.CalledProcessError, ValueError, FileNotFoundError) as exc:
@@ -89,8 +95,10 @@ def _run_parakeet(wav: Path, srt_dest: Path | None) -> str | None:
         out_dir = Path(out)
         cmd = [
             _PARAKEET_BIN,
-            "--output-format", "all" if srt_dest is not None else "txt",
-            "--output-dir", str(out_dir),
+            "--output-format",
+            "all" if srt_dest is not None else "txt",
+            "--output-dir",
+            str(out_dir),
             str(wav),
         ]
         try:
@@ -149,10 +157,20 @@ def transcribe(
     try:
         subprocess.run(
             [
-                "ffmpeg", "-y", "-i", str(audio),
-                "-ar", "16000", "-ac", "1", "-f", "wav", str(wav),
+                "ffmpeg",
+                "-y",
+                "-i",
+                str(audio),
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
+                str(wav),
             ],
-            capture_output=True, check=True,
+            capture_output=True,
+            check=True,
         )
 
         if use_parakeet:
@@ -164,9 +182,13 @@ def transcribe(
             return None
 
         cmd = [
-            WHISPER_BIN, "-m", resolved_model,
-            "-f", str(wav),
-            "-nt", "-np",
+            WHISPER_BIN,
+            "-m",
+            resolved_model,
+            "-f",
+            str(wav),
+            "-nt",
+            "-np",
         ]
         if srt_dest is not None:
             cmd += ["-osrt", "-of", str(of_path)]
@@ -211,7 +233,7 @@ def write_transcript_capture(
 ) -> Path:
     """Write a single Markdown capture file for a transcribed audio file.
 
-    Format mirrors the Telegram capture format (obsidian.py write_capture):
+    Format mirrors the capture format (obsidian.py write_capture):
     YAML frontmatter (id, created, source, type, status, tags) followed by
     the transcript as the body. Uses the audio file's mtime for ``created``.
     Filename: <HHMMSS>-transcribe-<id8>.md

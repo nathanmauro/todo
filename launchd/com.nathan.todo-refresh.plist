@@ -10,7 +10,7 @@
          pushes pending local creates/completions out. Replaces the retired
          SessionStart hook (removed 2026-06-01) that used to trigger this.
          Safe unattended: idempotent (closed_ts no-echo gate), flock-guarded
-         against the telegram daemon, returns 1 without raising when offline.
+         against the Slack listener, returns 1 without raising when offline.
          launchd runs one instance per label, so runs never overlap.
          Install:
            cp launchd/com.nathan.todo-refresh.plist ~/Library/LaunchAgents/
@@ -38,7 +38,7 @@
     <string>/Users/nathan/Library/Logs/todo-refresh.log</string>
 
     <!-- Todoist token comes from the login keychain (account todoist,
-         service todo-cli) — same item the CLI and telegram daemon read.
+         service todo-cli) — same item the CLI reads.
          /usr/bin must stay on PATH for `security`. -->
     <key>EnvironmentVariables</key>
     <dict>

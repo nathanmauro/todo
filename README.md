@@ -15,7 +15,7 @@ Local-first capture CLI. Tasks live in `~/.todo/todos.jsonl` and push to **Linea
 > (locally-done rows are marked already-reconciled and never replayed). The Todoist/Google Tasks sections
 > below describe the retired backends, selectable only via `TODO_TASK_BACKEND=todoist|gtasks` for a replay.
 
-> **Logseq is a frozen archive** (2026-06-01). The Logseq task-sync writers are kept but gated **off** behind `TODO_LOGSEQ_SYNC=1`; by default the CLI never writes to the Logseq graph. The mobile front door is the Telegram bot → Obsidian (`todo telegram-poll --loop`).
+> **Logseq is a frozen archive** (2026-06-01). The Logseq task-sync writers are kept but gated **off** behind `TODO_LOGSEQ_SYNC=1`; by default the CLI never writes to the Logseq graph. The mobile front door is Slack → Obsidian (`todo slack-listen`); see [`docs/slack-capture.md`](docs/slack-capture.md).
 
 ## Install
 
@@ -44,8 +44,9 @@ todo refresh    [--dry-run]
 todo audit
 todo reconcile  [--target all|logseq|todoist]
 todo pull       [--dry-run]
-todo telegram-poll [--loop]     # poll the capture bot; file each message into the vault
-todo telegram-send "text"       # message the last chat that messaged the bot
+todo notify [--route R] [--button LABEL=VERB[:PAYLOAD]] [--thread TS] [--check] "text"   # post to a Slack route
+todo slack-listen               # Socket Mode daemon; file each Slack message into the vault
+todo slack-doctor               # read-only Slack readiness checks
 todo doctor
 ```
 
@@ -59,7 +60,9 @@ Env overrides:
 - `TODO_LOGSEQ_GRAPH` — Logseq graph root (default `~/Notes/logseq`); only used when `TODO_LOGSEQ_SYNC=1`
 - `TODO_TODOIST_PROJECT_ID` — Todoist project to create tasks in (default: Inbox, resolved from `~/Developer/proj/cockpit/todoist-structure.json`)
 - `TODOIST_TOKEN` — overrides Keychain lookup
-- `TODO_TELEGRAM_STATE` / `TODO_TELEGRAM_CHAT` — Telegram offset cursor + last-chat file (default under `~/.todo/`)
+- `TODO_ACTIONS` — action registry for notification buttons (default `~/.todo/actions`)
+- `TODO_SLACK_ROUTES` / `TODO_SLACK_STATE` — Slack route map + listener state (default under `~/.todo/`)
+- `SLACK_ALLOWED_USER_ID` — Slack member id(s) allowed to drive the bot; empty = open mode (captures only)
 
 Todoist token in Keychain:
 
@@ -86,11 +89,11 @@ Use: `⌘Space` → `todo` → `↵` → type text → `↵`.
 - **Inbound** (remote → local): `reconcile` and `pull` flip a local row to `done` when its Todoist task is completed/deleted or its Logseq block is marked done.
 - **Outbound** (local → remote): `done` immediately closes the Todoist task (`POST /tasks/{id}/close`) and rewrites the Logseq block to `- DONE`, best-effort. If a remote is unreachable (offline, no token) the local completion still succeeds; the next `todo sync` flushes whatever didn't land.
 
-A `sync.todoist.closed_ts` stamp gates the outbound push so a completion is pushed exactly once and rows flipped done *by* a remote (via `reconcile`/`pull`) are never echoed back out. The two directions converge to the same state and never oscillate.
+A `sync.todoist.closed_ts` stamp gates the outbound push so a completion is pushed exactly once and rows flipped done _by_ a remote (via `reconcile`/`pull`) are never echoed back out. The two directions converge to the same state and never oscillate.
 
 ## Obsidian capture
 
-`todo note "..."` (and every Telegram capture) writes one Markdown file under `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md` with frontmatter (`id, created, source, type, status, tags`). Telegram file/media payloads are saved best-effort under `<vault>/Attachments/telegram/YYYY-MM-DD/`; if a download fails, the capture still records the metadata and error. One file per capture keeps a Google-Drive-synced vault conflict-free. The Obsidian vault is the canonical note/idea store.
+`todo note "..."` (and every Slack capture) writes one Markdown file under `<vault>/captures/YYYY-MM-DD/<HHMMSS>-<source>-<id8>.md` with frontmatter (`id, created, source, type, status, tags`). Files shared in Slack are saved best-effort under `<vault>/Attachments/slack/YYYY-MM-DD/`; if a download fails, the capture still records the metadata and error. Captures and attachments filed by the retired Telegram bot keep their `source: telegram` frontmatter and `Attachments/telegram/` paths; nothing rewrites them. One file per capture keeps a Google-Drive-synced vault conflict-free. The Obsidian vault is the canonical note/idea store.
 
 ## Plan / Backlog
 
@@ -147,7 +150,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nathan.todo-refresh.
 ```
 
 Unattended safety: every load→write critical section takes an `flock` on
-`~/.todo/todos.lock` (so the interval refresh and the Telegram daemon can't
+`~/.todo/todos.lock` (so the interval refresh and the Slack listener can't
 clobber each other; on a 120s timeout the verb fails loudly rather than ever
 writing unlocked), and `load_all` quarantines unparseable JSONL lines to
 `~/.todo/todos.rejects.jsonl` instead of silently dropping them.
