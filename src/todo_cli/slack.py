@@ -39,7 +39,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from . import actions, capture, obsidian
+from . import actions, capture, hermes, obsidian
 from . import transcribe as _transcribe_mod
 from .config import (
     KEYCHAIN_SERVICE,
@@ -529,6 +529,8 @@ def _reply_text(kind: str, path: Path, user_id: str | None) -> str:
 
 def handle_message_event(event: dict, routes: dict) -> str | None:
     """Route one message event. Returns the capture kind, or None if ignored."""
+    if hermes.is_hermes_message(event, routes):
+        return _route_to_hermes(event)
     if not is_capture_message(event, routes):
         log(
             "slack: ignored message"
@@ -549,6 +551,23 @@ def handle_message_event(event: dict, routes: dict) -> str | None:
     thread = event.get("thread_ts") or event.get("ts")
     send(_reply_text(kind, path, user_id), channel=event.get("channel"), thread_ts=thread)
     return kind
+
+
+def _route_to_hermes(event: dict) -> str | None:
+    """The #hermes channel is a conversation with Hermes, never a capture."""
+    if not hermes.accepts(event):
+        log(
+            "slack: hermes channel ignored"
+            f" user={event.get('user')} subtype={event.get('subtype')}"
+            f" bot={bool(event.get('bot_id'))}"
+        )
+        return None
+
+    def post(text: str, channel: str, thread_ts: str) -> None:
+        send(text, channel=channel, thread_ts=thread_ts)
+
+    hermes.handle_async(event, post)
+    return "hermes"
 
 
 # --- inbound: button clicks --------------------------------------------------
