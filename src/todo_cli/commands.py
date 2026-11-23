@@ -601,12 +601,25 @@ def _notify(text: str, route: str, buttons: list[tuple[str, str, str]], thread: 
     return 0
 
 
+def _route_has_channel(route: str) -> bool:
+    routes = slack.load_routes()
+    if route == "default":
+        return bool(slack.resolve_channel(route, routes))
+
+    table = routes.get("routes") or {}
+    return bool(table.get(route))
+
+
 def _notify_check(route: str) -> int:
-    """Preflight without sending: exit 0 only if a send to `route` could work."""
+    """Preflight without sending: exit 0 only if `route` reaches its own channel.
+
+    A send still falls back to the default channel; the check does not, so an
+    unmapped route is reported instead of silently sharing another room.
+    """
     problems: list[str] = []
     if not slack.bot_token():
         problems.append("slack-token-missing")
-    elif not slack.resolve_channel(route):
+    elif not _route_has_channel(route):
         problems.append("slack-route-unmapped")
     print(" ".join(problems) if problems else "ready")
     return 1 if problems else 0

@@ -390,8 +390,16 @@ def test_notify_ignores_the_retired_transport_switch(env, monkeypatch):
 
 
 def test_notify_check_reports_problem_codes(env, monkeypatch, capsys):
-    assert commands.cmd_notify(_notify_args(check=True)) == 0
+    assert commands.cmd_notify(_notify_args(route="agents", check=True)) == 0
     assert capsys.readouterr().out == "ready\n"
+
+    assert commands.cmd_notify(_notify_args(route="default", check=True)) == 0
+    assert capsys.readouterr().out == "ready\n"
+
+    # A send would land in the default room, but a producer asking about its own route
+    # must hear that the route has no channel (career sat in #alerts unnoticed this way).
+    assert commands.cmd_notify(_notify_args(check=True)) == 1
+    assert capsys.readouterr().out == "slack-route-unmapped\n"
 
     (env.tmp_path / "slack-routes.json").write_text("{}")
     assert commands.cmd_notify(_notify_args(check=True)) == 1
